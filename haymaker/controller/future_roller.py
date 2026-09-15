@@ -135,7 +135,7 @@ class FutureRoller:
             True when recoverable roll state existed.
         """
 
-        states = self.book.roll_states(active_only=True)
+        states = self.book.rolls.all(active_only=True)
         if not states:
             return False
         blocked = tuple(
@@ -171,7 +171,7 @@ class FutureRoller:
 
         executor = self.executor
         if executor is None:
-            if self.book.roll_states(active_only=True):
+            if self.book.rolls.all(active_only=True):
                 self._required_executor()
             log.debug("No FutureRollExecutor is registered.")
             return
@@ -182,7 +182,7 @@ class FutureRoller:
             return
         grouped = self._due_holdings(holdings, now)
         for series_key, by_contract in grouped.items():
-            current = self.book.roll_state(series_key)
+            current = self.book.rolls.for_series(series_key)
             if current is not None and current.stage is not FutureRollStage.COMPLETE:
                 continue
             endpoints = max(
@@ -270,7 +270,7 @@ class FutureRoller:
                     exc,
                 )
                 continue
-            current = self.book.roll_state(series_key)
+            current = self.book.rolls.for_series(series_key)
             if current is not None and current.stage is not FutureRollStage.COMPLETE:
                 continue
             if not isinstance(selector, FutureSelector):
@@ -319,7 +319,7 @@ class FutureRoller:
         )
 
     def _broker_quantity_matches(self, contract: ibi.Future) -> bool:
-        return self.book.aggregate_quantity(
+        return self.book.positions.quantity(
             contract
         ) == self.controller.trader.position_for_contract(contract)
 
@@ -351,7 +351,7 @@ class FutureRoller:
             stage=FutureRollStage.BLOCKED,
             completed_occurrences=(
                 previous.completed_occurrences
-                if (previous := self.book.roll_state(series_key)) is not None
+                if (previous := self.book.rolls.for_series(series_key)) is not None
                 else ()
             ),
             failure_reason=reason,

@@ -144,7 +144,7 @@ def apply_fill(controller, trade, quantity, exec_id="exec-1", complete=True):
     trade.orderStatus.remaining -= quantity
     if complete:
         trade.orderStatus.status = ibi.OrderStatus.Filled
-    info = controller.book.order_by_id(trade.order.orderId)
+    info = controller.book.orders.by_id(trade.order.orderId)
     controller.register_position(info, fill)
     return fill
 
@@ -197,7 +197,7 @@ def test_serial_model_submits_absolute_adjustment(execution_runtime):
 
     assert trader.trades[0].order.action == "BUY"
     assert trader.trades[0].order.totalQuantity == 3
-    assert model.book.order_by_id(1).role == StandardOrderRole.TARGET_ADJUSTMENT
+    assert model.book.orders.by_id(1).role == StandardOrderRole.TARGET_ADJUSTMENT
 
 
 def test_serial_updates_one_concrete_target_while_its_order_is_active(
@@ -208,7 +208,7 @@ def test_serial_updates_one_concrete_target_while_its_order_is_active(
     model.onData(target(1))
     model.onData(target(2))
     assert len(trader.trades) == 1
-    assert model.book.target_state(contract()).target_quantity == 2
+    assert model.book.targets.for_contract(contract()).target_quantity == 2
 
 
 def test_serial_accepts_separate_concrete_expiries_within_one_series(
@@ -256,8 +256,8 @@ def test_serial_executes_concrete_target_without_implicit_roll_decision(
     model.onData(target(2, con_id=2))
 
     assert len(trader.trades) == 2
-    assert model.book.target_state(active).target_quantity == 2
-    assert model.book.target_state(held).target_quantity == 1
+    assert model.book.targets.for_contract(active).target_quantity == 2
+    assert model.book.targets.for_contract(held).target_quantity == 1
 
 
 def test_serial_model_rejects_wrong_message_at_runtime(execution_runtime):
@@ -379,7 +379,7 @@ def test_bracket_model_rejects_missing_or_stale_intent(execution_runtime):
             )
         )
 
-    assert model.book.position_state("alpha") is None
+    assert model.book.positions.for_source("alpha") is None
 
 
 def test_bracket_model_rejects_same_side_resize(execution_runtime):
@@ -432,7 +432,7 @@ def test_bracket_model_validates_recovery_inputs(execution_runtime, value):
             )
         )
 
-    assert model.book.position_state("alpha") is None
+    assert model.book.positions.for_source("alpha") is None
 
 
 def test_brackets_attach_only_after_complete_entry_fill(execution_runtime):
@@ -461,9 +461,9 @@ def test_brackets_attach_only_after_complete_entry_fill(execution_runtime):
     entry.filledEvent.emit(entry)
 
     assert len(trader.trades) == 2
-    assert controller.book.order_by_id(2).role == StandardOrderRole.STOP_LOSS
-    assert controller.book.order_by_id(2).position_id == (
-        controller.book.position_state("alpha").position_id
+    assert controller.book.orders.by_id(2).role == StandardOrderRole.STOP_LOSS
+    assert controller.book.orders.by_id(2).position_id == (
+        controller.book.positions.for_source("alpha").position_id
     )
 
 
@@ -539,7 +539,8 @@ async def test_entry_fill_continues_to_newer_close_target(execution_runtime):
     await wait_for_condition(lambda: len(trader.trades) == 3)
 
     assert [
-        controller.book.order_by_id(trade.order.orderId).role for trade in trader.trades
+        controller.book.orders.by_id(trade.order.orderId).role
+        for trade in trader.trades
     ] == [
         StandardOrderRole.OPEN,
         StandardOrderRole.STOP_LOSS,
@@ -580,8 +581,8 @@ async def test_reversal_closes_then_opens_new_episode(execution_runtime):
     await asyncio.sleep(0)
 
     assert trader.trades[1].order.action == "SELL"
-    assert runtime.book.position_state("alpha").position_id != "old-episode"
-    assert runtime.book.position_state("alpha").bracket_inputs == {"atr": 5}
+    assert runtime.book.positions.for_source("alpha").position_id != "old-episode"
+    assert runtime.book.positions.for_source("alpha").bracket_inputs == {"atr": 5}
 
 
 def test_stop_fill_closes_episode_and_prevents_restart_reentry(
@@ -612,7 +613,7 @@ def test_stop_fill_closes_episode_and_prevents_restart_reentry(
     assert stop is not None
     apply_fill(controller, stop, 1)
 
-    state = runtime.book.position_state("alpha")
+    state = runtime.book.positions.for_source("alpha")
     assert state.quantity == 0
     assert state.target_quantity == 0
     assert state.position_id is None
@@ -987,7 +988,7 @@ def test_router_does_not_partially_reassign_unroutable_idle_targets(
         router.onStart({})
 
     assert current.recoveries == 0
-    assert runtime.book.target_state(contract()).execution_model_name == "old"
+    assert runtime.book.targets.for_contract(contract()).execution_model_name == "old"
     assert "idle target recovery could not be routed" in caplog.text
 
 
@@ -1010,7 +1011,7 @@ def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):
 
     router.onStart({})
 
-    state = runtime.book.target_state(contract())
+    state = runtime.book.targets.for_contract(contract())
     assert state.execution_model_name == "current"
     assert state.target_quantity == 2
     assert state.target_created_at == created_at
@@ -1047,7 +1048,9 @@ def test_serial_recovery_handoff_converges_from_existing_quantity(
     assert adjustment is not filled
     assert adjustment.order.action == "BUY"
     assert adjustment.order.totalQuantity == 1
-    assert runtime.book.target_state(contract()).execution_model_name == "current"
+    assert (
+        runtime.book.targets.for_contract(contract()).execution_model_name == "current"
+    )
 
 
 def test_stale_serial_target_is_not_emitted_as_accepted(execution_runtime):

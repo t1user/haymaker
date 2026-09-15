@@ -86,7 +86,8 @@ class _BaseBinarySignalProcessor(Atom):
         if current_direction == 0:
             if (
                 self.respect_blocked_direction
-                and self.book.blocked_direction(signal.source_key) == direction
+                and self.book.positions.blocked_direction(signal.source_key)
+                == direction
             ):
                 return None
             return PositionProposal(

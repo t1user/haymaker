@@ -374,7 +374,7 @@ class LiveRuntime:
     def _warn_active_target_adjustments(self) -> None:
         """Warn when a later deployment must preserve routed recovery."""
 
-        active = self.context.book.active_orders(
+        active = self.context.book.orders.active(
             role=StandardOrderRole.TARGET_ADJUSTMENT
         )
         if not active:
@@ -403,8 +403,8 @@ class LiveRuntime:
     def _warn_active_futures_rolls(self) -> None:
         """Warn that incomplete roll state must remain recovery-compatible."""
 
-        states = self.context.book.roll_states(active_only=True)
-        orders = self.context.book.active_orders(role=StandardOrderRole.ROLL)
+        states = self.context.book.rolls.all(active_only=True)
+        orders = self.context.book.orders.active(role=StandardOrderRole.ROLL)
         if not states and not orders:
             return
         log.warning(

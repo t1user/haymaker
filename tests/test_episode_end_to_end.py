@@ -58,17 +58,17 @@ async def test_entry_partial_fill_protection_and_commission_without_blotter(epis
     await settle_events()
     entry = broker.submitted[0]
     first = await broker.fill(entry, 1)
-    assert runtime.book.position_state("alpha").quantity == 1
+    assert runtime.book.positions.for_source("alpha").quantity == 1
     assert broker.quantities[entry.contract] == 1
     assert len(broker.submitted) == 1
     await broker.fill(entry, 1)
     assert len(broker.submitted) == 3
-    assert runtime.book.position_state("alpha").quantity == 2
+    assert runtime.book.positions.for_source("alpha").quantity == 2
     assert {
-        runtime.book.order_by_id(t.order.orderId).role for t in broker.submitted[1:]
+        runtime.book.orders.by_id(t.order.orderId).role for t in broker.submitted[1:]
     } == {StandardOrderRole.STOP_LOSS, StandardOrderRole.TAKE_PROFIT}
     await broker.commission(entry, first)
-    info = runtime.book.order_by_id(entry.order.orderId)
+    info = runtime.book.orders.by_id(entry.order.orderId)
     assert info.fills[0].commission_report.commission == 1.25
     assert runtime.book.blotter is None
 
@@ -82,14 +82,14 @@ async def test_protective_exit_oca_and_direction_block(episode, exit_index):
     await broker.fill(broker.submitted[exit_index])
     assert not broker.openTrades()
     assert not broker.positions()
-    assert runtime.book.position_state("alpha").blocked_direction == 1
+    assert runtime.book.positions.for_source("alpha").blocked_direction == 1
     signal.onData(observation(1))
     await settle_events()
     assert len(broker.submitted) == 3
     signal.onData(observation(-1))
-    assert runtime.book.position_state("alpha").blocked_direction == 1
+    assert runtime.book.positions.for_source("alpha").blocked_direction == 1
     await broker.fill(broker.submitted[-1], 1)
-    assert runtime.book.position_state("alpha").blocked_direction is None
+    assert runtime.book.positions.for_source("alpha").blocked_direction is None
 
 
 @pytest.mark.parametrize("direction", [-1, 1])
@@ -104,13 +104,13 @@ async def test_differing_contract_exit_and_reversal(
     entry = broker.submitted[0]
     if not pending_entry:
         await broker.fill(entry)
-    original = runtime.book.position_state("alpha")
+    original = runtime.book.positions.for_source("alpha")
     incoming = ibi.Future("ES", conId=102, exchange="CME", localSymbol="ESZ6")
     signal.contract = incoming
     # EVENT zero is intentionally ignored; STATE zero explicitly requests flat.
     signal.signal_type = SignalType.STATE
     signal.onData(observation(-direction if reverse else 0, atr=9))
-    accepted = runtime.book.position_state("alpha")
+    accepted = runtime.book.positions.for_source("alpha")
     assert accepted.contract == entry.contract
     assert accepted.target_contract == incoming
     assert accepted.bracket_inputs == {"atr": 5}
@@ -120,7 +120,7 @@ async def test_differing_contract_exit_and_reversal(
     close = next(
         t
         for t in broker.submitted
-        if runtime.book.order_by_id(t.order.orderId).role == StandardOrderRole.CLOSE
+        if runtime.book.orders.by_id(t.order.orderId).role == StandardOrderRole.CLOSE
     )
     assert close.contract == entry.contract
     assert close.order.ocaGroup == broker.submitted[1].order.ocaGroup
@@ -131,12 +131,12 @@ async def test_differing_contract_exit_and_reversal(
     if reverse:
         new_entry = broker.submitted[-1]
         assert new_entry.contract == incoming
-        state = runtime.book.position_state("alpha")
+        state = runtime.book.positions.for_source("alpha")
         assert state.position_id != original.position_id
         assert state.bracket_inputs == {"atr": 9}
         await broker.fill(new_entry)
         assert broker.quantities[incoming] == -direction * 2
-        assert runtime.book.position_state("alpha").quantity == -direction * 2
+        assert runtime.book.positions.for_source("alpha").quantity == -direction * 2
     else:
         assert not broker.positions()
         assert not broker.openTrades()
@@ -190,5 +190,5 @@ async def test_reversal_recovers_new_contract_without_close_filled_callback(
     new_entry = replacement.submitted[-1]
     assert new_entry.contract == incoming
     await replacement.fill(new_entry)
-    assert recovered.position_state("alpha").quantity == -direction * 2
+    assert recovered.positions.for_source("alpha").quantity == -direction * 2
     assert replacement.quantities[incoming] == -direction * 2

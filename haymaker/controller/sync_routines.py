@@ -41,7 +41,7 @@ class OrderSync:
         """Find Book-active trades no longer present in broker openTrades."""
 
         broker_ids = {trade.order.orderId for trade in self.ib.openTrades()}
-        for info in self.book.active_orders():
+        for info in self.book.orders.active():
             if info.orderId not in broker_ids:
                 self.inactive.append(info.trade)
         return self
@@ -69,7 +69,7 @@ class OrderSync:
 
     def _reconstruct_from_fills(self, trade: ibi.Trade) -> ibi.Trade | None:
         """Merge persisted and broker execution evidence, including fill price."""
-        info = self.book.order_by_id(trade.order.orderId)
+        info = self.book.orders.by_id(trade.order.orderId)
         if info is None:
             return None
         fills = [
@@ -121,7 +121,7 @@ class PositionSync:
         self.broker_positions = {
             position.contract: position.position for position in self.positions
         }
-        logical = self.book.logical_positions()
+        logical = self.book.positions.by_contract()
         self.errors = {
             contract: logical.get(contract, 0.0)
             - self.broker_positions.get(contract, 0.0)

@@ -122,7 +122,7 @@ class ExecutionRouter(Atom):
             return
         model = self._model_for_rules(data)
         try:
-            owner = self.book.active_order_model_for_contract(
+            owner = self.book.orders.owner_for_contract(
                 data.contract,
                 role=StandardOrderRole.TARGET_ADJUSTMENT,
             )
@@ -152,7 +152,7 @@ class ExecutionRouter(Atom):
     def _working_order_block_reason(self) -> str | None:
         """Check active direct adjustments against the current routing rules."""
         grouped: dict[int, list[OrderInfo]] = {}
-        for info in self.book.active_orders(role=StandardOrderRole.TARGET_ADJUSTMENT):
+        for info in self.book.orders.active(role=StandardOrderRole.TARGET_ADJUSTMENT):
             if info.source_key is not None:
                 return f"Active TARGET_ADJUSTMENT orderId={info.orderId} has source attribution"
             grouped.setdefault(info.trade.contract.conId, []).append(info)
@@ -161,7 +161,7 @@ class ExecutionRouter(Atom):
             if len(owners) != 1:
                 return f"conId={con_id} has active adjustments owned by multiple models: {sorted(owners)}"
             owner = next(iter(owners))
-            state = self.book.target_state(orders[0].trade.contract)
+            state = self.book.targets.for_contract(orders[0].trade.contract)
             if state is None:
                 return f"active TARGET_ADJUSTMENT for conId={con_id} has no recoverable TargetState"
             try:
@@ -176,8 +176,8 @@ class ExecutionRouter(Atom):
         """Build current-rule ownership updates for idle recovered targets."""
 
         assignments: list[TargetState] = []
-        for state in self.book.latest_targets():
-            if self.book.active_orders(
+        for state in self.book.targets.all():
+            if self.book.orders.active(
                 contract=state.contract,
                 role=StandardOrderRole.TARGET_ADJUSTMENT,
             ):

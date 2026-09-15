@@ -96,10 +96,12 @@ def test_one_to_one_pipeline_submits_attributed_open(atom_runtime):
     trade = trader.trades[0]
     assert trade.order.action == "BUY"
     assert trade.order.totalQuantity == 2
-    info = atom_runtime.book.order_by_id(trade.order.orderId)
+    info = atom_runtime.book.orders.by_id(trade.order.orderId)
     assert info.source_key == "alpha"
     assert info.execution_model_name == "alpha_brackets"
-    assert info.position_id == atom_runtime.book.position_state("alpha").position_id
+    assert (
+        info.position_id == atom_runtime.book.positions.for_source("alpha").position_id
+    )
 
 
 class AggregatePortfolio(Portfolio):
@@ -151,4 +153,4 @@ def test_direct_pipeline_routes_aggregate_target(atom_runtime):
     )
 
     assert len(trader.trades) == 1
-    assert atom_runtime.book.target_state(contract()).target_quantity == 1
+    assert atom_runtime.book.targets.for_contract(contract()).target_quantity == 1

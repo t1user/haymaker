@@ -239,7 +239,7 @@ class SyncCoordinator:
         """
         for trade in trades:
             order_id = trade.order.orderId
-            info = self.controller.book.order_by_id(order_id)
+            info = self.controller.book.orders.by_id(order_id)
             if info is not None:
                 self._faulty_trades.append(info)
             self.controller.book.prune_order(order_id)
@@ -258,7 +258,7 @@ class SyncCoordinator:
         for contract, difference in errors.items():
             adjustments = tuple(
                 info
-                for info in self.controller.book.active_orders(contract=contract)
+                for info in self.controller.book.orders.active(contract=contract)
                 if info.role
                 in {
                     StandardOrderRole.OPEN,
@@ -285,7 +285,7 @@ class SyncCoordinator:
 
         log.error("Will attempt to fix position records")
         for contract, diff in errors.items():
-            states = self.controller.book.positions_for_contract(contract)
+            states = self.controller.book.positions.source_states_for_contract(contract)
             corrected_at = datetime.now(timezone.utc)
             log.debug(
                 "Sources for contract %s: %s",

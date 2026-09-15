@@ -41,8 +41,8 @@ def test_interrupted_source_projection_recovers_once(
     monkeypatch.setattr(state_saver, "save", save)
     for _ in range(2):
         recovered = restore(order_saver, state_saver)
-        assert recovered.position_state("alpha").quantity == 1
-        assert recovered.aggregate_quantity(opening.contract) == 1
+        assert recovered.positions.for_source("alpha").quantity == 1
+        assert recovered.positions.quantity(opening.contract) == 1
         assert not recovered.apply_fill(opening, execution)
 
 
@@ -57,9 +57,9 @@ def test_checkpoint_preserves_explicit_correction_and_reset(
     if reset:
         book.clear_state()
     else:
-        book.update_position(replace(book.position_state("alpha"), quantity=0))
+        book.update_position(replace(book.positions.for_source("alpha"), quantity=0))
     recovered = restore(order_saver, state_saver)
-    assert recovered.aggregate_quantity(opening.contract) == 0
+    assert recovered.positions.quantity(opening.contract) == 0
     assert not recovered.apply_fill(opening, fill(opening))
 
 
@@ -73,9 +73,9 @@ def test_rebound_order_is_counted_once_after_restart(book, order_saver, state_sa
         rebound = trade(order_id=order_id, perm_id=900)
         book.rebind_trade(rebound)
         book = restore(order_saver, state_saver)
-        assert book.aggregate_quantity(opening.contract) == 1
-        assert len(book.orders()) == 1
-        assert book.order_by_perm_id(900).orderId == order_id
+        assert book.positions.quantity(opening.contract) == 1
+        assert len(book.orders.query()) == 1
+        assert book.orders.by_perm_id(900).orderId == order_id
         assert not book.apply_fill(rebound, execution)
 
 

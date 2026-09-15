@@ -43,11 +43,11 @@ class PortfolioStateMixin(Atom):
 
     def load_state(self) -> Mapping[str, Any] | None:
         """Load the saved mapping, or return None for a first run."""
-        return self.book.load_portfolio_state(self.portfolio_key)
+        return self.book.portfolios.load(self.portfolio_key)
 
     def save_state(self, state: Mapping[str, Any]) -> None:
         """Save normalized state using Book's configured ordered write policy."""
-        self.book.save_portfolio_state(self.portfolio_key, state)
+        self.book.portfolios.save(self.portfolio_key, state)
 
 
 class PositionAllocator(Protocol):
@@ -215,7 +215,7 @@ class Portfolio(Atom, ABC):
             Read-only mapping of non-flat concrete Contracts to signed filled
             quantities. Working orders and desired allocations are not fills;
             query Book's active orders and targets separately. For one exact
-            Contract use ``self.book.aggregate_quantity(contract)``.
+            Contract use ``self.book.positions.quantity(contract)``.
 
         Raises:
             KeyError: If the Contract has no registered blueprint membership.
@@ -229,7 +229,7 @@ class Portfolio(Atom, ABC):
         return MappingProxyType(
             {
                 held: quantity
-                for held, quantity in self.book.logical_positions().items()
+                for held, quantity in self.book.positions.by_contract().items()
                 if held.conId in members
             }
         )

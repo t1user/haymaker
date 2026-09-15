@@ -185,7 +185,7 @@ class Controller(Atom):
     def _episode_contracts(self, target: PositionTarget) -> tuple[ibi.Contract, ...]:
         """Verify held execution identity, not a CLOSE message's destination."""
         state = (
-            self.book.position_state(target.source_key)
+            self.book.positions.for_source(target.source_key)
             if target.source_key is not None
             else None
         )
@@ -517,7 +517,7 @@ class Controller(Atom):
         await asyncio.sleep(0)
         if trade.order.orderId < 0:
             return
-        if self.book.order_by_id(trade.order.orderId) is None:
+        if self.book.orders.by_id(trade.order.orderId) is None:
             log.critical(
                 "Unknown broker trade: %s %s",
                 trade.order,
@@ -529,9 +529,9 @@ class Controller(Atom):
 
         if self._hold:
             return
-        info = self.book.order_by_id(trade.order.orderId) or self.book.order_by_perm_id(
-            trade.order.permId
-        )
+        info = self.book.orders.by_id(
+            trade.order.orderId
+        ) or self.book.orders.by_perm_id(trade.order.permId)
         if info is None:
             if not trade.order.orderId:
                 log.warning(
@@ -570,7 +570,7 @@ class Controller(Atom):
 
         info = (
             self.assign_manual_trade(trade)
-            or self.book.order_by_id(trade.order.orderId)
+            or self.book.orders.by_id(trade.order.orderId)
             or self.match_by_permId(trade, fill)
             or self.assign_unknown_trade(trade)
         )
@@ -589,9 +589,9 @@ class Controller(Atom):
         if self._hold or not trade.order.orderId:
             return
         await asyncio.sleep(0)
-        info = self.book.order_by_id(trade.order.orderId) or self.book.order_by_perm_id(
-            trade.order.permId
-        )
+        info = self.book.orders.by_id(
+            trade.order.orderId
+        ) or self.book.orders.by_perm_id(trade.order.permId)
         if info is None:
             log.error("Commission report for unknown orderId=%s", trade.order.orderId)
             return
@@ -633,9 +633,9 @@ class Controller(Atom):
         if not self._target_is_latest(target, execution_model_name):
             return False
         while self._active_target_orders(target, execution_model_name) or (
-            self.book.roll_state_for_source(target.source_key)
+            self.book.rolls.for_source(target.source_key)
             if target.source_key is not None
-            else self.book.roll_state_for_contract(target.contract)
+            else self.book.rolls.for_contract(target.contract)
         ):
             if retries >= self.execution_verification_max_retries:
                 break
@@ -646,14 +646,14 @@ class Controller(Atom):
         if not self._target_is_latest(target, execution_model_name):
             return False
         position = (
-            self.book.position_state(target.source_key)
+            self.book.positions.for_source(target.source_key)
             if target.source_key is not None
             else None
         )
         actual = (
             position.quantity
             if position is not None
-            else (self.book.aggregate_quantity(target.contract))
+            else (self.book.positions.quantity(target.contract))
         )
         if actual != target.target_quantity:
             log.error(
@@ -675,12 +675,12 @@ class Controller(Atom):
             StandardOrderRole.TARGET_ADJUSTMENT,
         }
         if target.source_key is None:
-            orders = self.book.active_orders(
+            orders = self.book.orders.active(
                 contract=target.contract,
                 execution_model_name=execution_model_name,
             )
         else:
-            orders = self.book.active_orders(
+            orders = self.book.orders.active(
                 source_key=target.source_key,
                 execution_model_name=execution_model_name,
             )
@@ -692,7 +692,7 @@ class Controller(Atom):
         """Return whether Book still identifies this exact accepted setpoint."""
 
         if target.source_key is not None:
-            position_state = self.book.position_state(target.source_key)
+            position_state = self.book.positions.for_source(target.source_key)
             return (
                 position_state is not None
                 and position_state.execution_model_name == execution_model_name
@@ -701,7 +701,7 @@ class Controller(Atom):
                 and position_state.target_quantity == target.target_quantity
                 and position_state.target_created_at == target.created_at
             )
-        target_state = self.book.target_state(target.contract)
+        target_state = self.book.targets.for_contract(target.contract)
         return (
             target_state is not None
             and target_state.execution_model_name == execution_model_name
@@ -713,7 +713,7 @@ class Controller(Atom):
     def verify_position_with_broker(self, contract: ibi.Contract) -> None:
         """Compare aggregate logical Book quantity with the broker position."""
 
-        logical = self.book.aggregate_quantity(contract)
+        logical = self.book.positions.quantity(contract)
         broker = self.trader.position_for_contract(contract)
         if logical != broker:
             log.error(
@@ -726,7 +726,7 @@ class Controller(Atom):
     def match_by_permId(self, trade: ibi.Trade, fill: ibi.Fill) -> OrderInfo | None:
         """Find and rebind an order using broker permanent id."""
 
-        info = self.book.order_by_perm_id(trade.order.permId)
+        info = self.book.orders.by_perm_id(trade.order.permId)
         if info is not None:
             if not trade.order.orderId:
                 trade.order.orderId = info.orderId
@@ -745,7 +745,7 @@ class Controller(Atom):
 
         if not trade.contract.conId:
             return None
-        states = self.book.positions_for_contract(trade.contract)
+        states = self.book.positions.source_states_for_contract(trade.contract)
         if len(states) == 1:
             return states[0].source_key
         return None
@@ -759,7 +759,11 @@ class Controller(Atom):
         if not trade.order.orderId:
             raise ValueError("Cannot register unknown Trade with orderId 0")
         source_key = self._source_for_unknown_trade(trade)
-        state = self.book.position_state(source_key) if source_key is not None else None
+        state = (
+            self.book.positions.for_source(source_key)
+            if source_key is not None
+            else None
+        )
         return OrderInfo(
             trade=trade,
             role=str(role),
@@ -776,7 +780,7 @@ class Controller(Atom):
 
         if trade.order.orderId >= 0:
             return None
-        existing = self.book.order_by_id(trade.order.orderId)
+        existing = self.book.orders.by_id(trade.order.orderId)
         if existing is not None:
             return existing
         return self.book.save_order(
@@ -798,7 +802,7 @@ class Controller(Atom):
     def cancel_orders_for_source(self, source_key: str) -> None:
         """Cancel every working order attributed to one source."""
 
-        for info in self.book.active_orders(source_key=source_key):
+        for info in self.book.orders.active(source_key=source_key):
             self.cancel(info.trade)
 
     def close_position_for_source(
@@ -806,7 +810,7 @@ class Controller(Atom):
     ) -> None:
         """Submit one attributed market order to flatten a logical source."""
 
-        state = self.book.position_state(source_key)
+        state = self.book.positions.for_source(source_key)
         if state is None or not state.quantity or state.contract is None:
             log.error("Attempt to close zero or unknown source %s", source_key)
             return
@@ -874,7 +878,7 @@ class Controller(Atom):
     ) -> None:
         """Log broker messages and count genuine order rejections."""
 
-        info = self.book.order_by_id(reqId)
+        info = self.book.orders.by_id(reqId)
         model_name = info.execution_model_name if info is not None else ""
         role = info.role if info is not None else ""
         order = info.trade.order if info is not None else ""
@@ -883,7 +887,7 @@ class Controller(Atom):
             log.critical(
                 "ORDER REJECTED: %s errorCode=%s, %s", errorString, errorCode, context
             )
-            self.book.register_rejected_order(model_name)
+            self.book.orders.register_rejection(model_name)
         elif errorCode == 202 and "YOUR ORDER IS NOT ACCEPTED" in errorString:
             log.error("ORDER NOT ACCEPTED: %s, %s", errorString, context)
         elif errorCode in self.ignore_errors:
@@ -908,7 +912,7 @@ class Controller(Atom):
     async def close_positions(self) -> None:
         for position in self.ib.positions():
             await self.ib.qualifyContractsAsync(position.contract)
-            states = self.book.positions_for_contract(position.contract)
+            states = self.book.positions.source_states_for_contract(position.contract)
             state = states[0] if len(states) == 1 else None
             self._submit_registered_trade(
                 position.contract,
@@ -920,7 +924,7 @@ class Controller(Atom):
                 execution_model_name=(
                     state.execution_model_name
                     if state is not None
-                    else self.book.active_order_model_for_contract(position.contract)
+                    else self.book.orders.owner_for_contract(position.contract)
                     or "nuke_liquidation"
                 ),
                 source_key=state.source_key if state is not None else None,

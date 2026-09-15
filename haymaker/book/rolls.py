@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -16,7 +16,8 @@ from ..validators import (
     non_empty_string,
     qualified_contract,
 )
-from .persistence import utc_now
+from ..saver import AbstractBaseSaver
+from .persistence import utc_now, PersistenceWriter
 
 from enum import StrEnum
 from .targets import TargetState
@@ -316,4 +317,96 @@ class RollState:
             failure_reason=data.get("failure_reason"),
             created_at=decode_tree(data["created_at"]),
             updated_at=decode_tree(data["updated_at"]),
+        )
+
+
+class RollStore:
+    """Own per-series recovery checkpoints, not roll policy or broker sequencing."""
+
+    def __init__(self, saver: AbstractBaseSaver, writer: PersistenceWriter) -> None:
+        """Share Book's ordered state persistence."""
+        self._saver = saver
+        self._writer = writer
+        self._items: dict[str, RollState] = {}
+
+    def _put(self, state: RollState) -> None:
+        """Persist a roll checkpoint before dependent accounting changes."""
+        self._writer.save(self._saver, state.encode())
+        self._items[state.series_key] = state
+
+    def _restore(self, document: Mapping[str, Any]) -> None:
+        """Load a checkpoint without advancing its execution stage."""
+        state = RollState.decode(document)
+        self._items[state.series_key] = state
+
+    def _clear(self, cleared_at: datetime) -> None:
+        """Persist completed tombstones during an explicit account reset."""
+        for state in self._items.values():
+            self._put(
+                replace(
+                    state,
+                    participant_index=len(state.participants),
+                    stage=FutureRollStage.COMPLETE,
+                    roll_order_id=None,
+                    old_protection_order_ids=(),
+                    replacement_stop_order_id=None,
+                    replacement_take_profit_order_id=None,
+                    failure_reason=None,
+                    updated_at=cleared_at,
+                )
+            )
+        self._items.clear()
+
+    def for_series(self, series_key: str) -> RollState | None:
+        """Return the current persisted roll for one futures series."""
+
+        return self._items.get(series_key)
+
+    def all(self, *, active_only: bool = False) -> tuple[RollState, ...]:
+        """Return all current series rolls, optionally excluding completed ones."""
+
+        return tuple(
+            state
+            for state in self._items.values()
+            if not active_only or state.stage is not FutureRollStage.COMPLETE
+        )
+
+    def for_source(self, source_key: str) -> RollState | None:
+        """Return a non-complete roll containing one one-to-one source."""
+
+        return next(
+            (
+                state
+                for state in self._items.values()
+                if state.stage is not FutureRollStage.COMPLETE
+                and any(
+                    participant.source_key == source_key
+                    for participant in state.participants
+                )
+            ),
+            None,
+        )
+
+    def for_contract(self, contract: ibi.Contract) -> RollState | None:
+        """Return an active direct roll reserving either concrete endpoint."""
+        con_id = qualified_contract(contract).conId
+        return next(
+            (
+                state
+                for state in self._items.values()
+                if not state.terminal
+                and state.mode is FutureRollMode.DIRECT
+                and con_id in (state.old_contract.conId, state.new_contract.conId)
+            ),
+            None,
+        )
+
+    def active_bracket(self) -> tuple[RollState, ...]:
+        """Return incomplete one-to-one rolls that own broker projections."""
+
+        return tuple(
+            state
+            for state in self._items.values()
+            if state.mode is FutureRollMode.BRACKET
+            and state.stage is not FutureRollStage.COMPLETE
         )

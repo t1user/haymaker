@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from ..saver import AbstractBaseSaver
+from .persistence import PersistenceWriter
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -16,6 +20,7 @@ from ..validators import (
     ib_contract,
     non_empty_string,
     readonly_mapping,
+    qualified_contract,
 )
 
 
@@ -316,3 +321,198 @@ class OrderInfo:
             _applied_fill_keys=set(data.get("applied_fill_keys", ())),
             previous_order_ids=tuple(data.get("previous_order_ids", ())),
         )
+
+
+class OrderStore:
+    """Own broker order records, their queries and evidence persistence.
+
+    Book coordinates mutations that also affect positions. The underscored
+    mutation methods are internal; public methods query the owned records.
+    """
+
+    def __init__(self, saver: AbstractBaseSaver, writer: PersistenceWriter) -> None:
+        """Use Book's shared writer; never construct an independent queue."""
+        self._saver = saver
+        self._writer = writer
+        self._items: dict[int, OrderInfo] = {}
+        self._received_keys: defaultdict[str, set[str]] = defaultdict(set)
+        self._rejections: defaultdict[str, int] = defaultdict(int)
+
+    def _put(self, info: OrderInfo) -> None:
+        """Persist order evidence before the coordinator updates projections."""
+        if not info.orderId:
+            raise ValueError("Cannot persist an order with orderId 0")
+        self._writer.save(self._saver, info.encode())
+        self._items[info.orderId] = info
+        self._index_fills(info)
+
+    def _index_fills(self, info: OrderInfo) -> None:
+        """Maintain source checkpoints without scanning historical orders on update."""
+        if info.source_key is not None and not isinstance(info.trade.contract, ibi.Bag):
+            self._received_keys[info.source_key].update(
+                record.deduplication_key for record in info.fills
+            )
+
+    def received_fill_keys(self, source_key: str) -> frozenset[str]:
+        """Return evidence already received for one source."""
+        return frozenset(self._received_keys.get(source_key, ()))
+
+    def _restore(self, order_documents: Sequence[Mapping[str, Any]]) -> None:
+        """Restore canonical records, excluding documents superseded by rebinding."""
+        self._items = {}
+        for document in order_documents:
+            document = dict(document)
+            document.pop("_id", None)
+            info = OrderInfo.decode(document)
+            if not info.orderId:
+                raise ValueError("Persisted order must have a non-zero orderId")
+            self._items[info.orderId] = info
+        superseded = {
+            order_id
+            for info in self._items.values()
+            for order_id in info.previous_order_ids
+        }
+        for info in tuple(self._items.values()):
+            for order_id in info.previous_order_ids:
+                previous = self._items.get(order_id)
+                if previous is not None and (
+                    not info.permId or previous.permId != info.permId
+                ):
+                    raise ValueError("Rebound order history has conflicting permId")
+        self._items = {
+            key: info for key, info in self._items.items() if key not in superseded
+        }
+
+        self._received_keys.clear()
+        for info in self._items.values():
+            self._index_fills(info)
+
+    def _rebind(self, trade: ibi.Trade) -> tuple[OrderInfo | None, int]:
+        """Bind a known live Trade and return its record and previous broker ID."""
+        info = self.by_id(trade.order.orderId) or self.by_perm_id(trade.order.permId)
+        if info is None:
+            return None, 0
+        if info.trade is not trade:
+            old_order_id = info.orderId
+            if not trade.order.orderId:
+                trade.order.orderId = old_order_id
+            existing = self._items.get(trade.order.orderId)
+            if existing is not None and existing is not info:
+                raise ValueError("Rebound orderId already belongs to another order")
+            if old_order_id != trade.order.orderId:
+                info.previous_order_ids = tuple(
+                    key
+                    for key in dict.fromkeys((*info.previous_order_ids, old_order_id))
+                    if key != trade.order.orderId
+                )
+            info.trade = trade
+            if old_order_id != info.orderId:
+                self._items.pop(old_order_id, None)
+            return info, old_order_id
+        return info, info.orderId
+
+    def by_id(self, order_id: int, *, active_only: bool = False) -> OrderInfo | None:
+        """Look up an order by actual broker orderId."""
+
+        info = self._items.get(order_id)
+        if info is None or (active_only and not info.active):
+            return None
+        return info
+
+    def by_perm_id(self, perm_id: int) -> OrderInfo | None:
+        """Fall back to broker permanent-id order lookup."""
+
+        if not perm_id:
+            return None
+        return next(
+            (info for info in self._items.values() if info.permId == perm_id),
+            None,
+        )
+
+    def query(
+        self,
+        *,
+        source_key: str | None = None,
+        contract: ibi.Contract | None = None,
+        role: str | None = None,
+        execution_model_name: str | None = None,
+        active_only: bool = False,
+    ) -> tuple[OrderInfo, ...]:
+        """Query persisted orders using any supported attribution fields."""
+
+        con_id = contract.conId if contract is not None else None
+        return tuple(
+            info
+            for info in self._items.values()
+            if (not active_only or info.active)
+            and (source_key is None or info.source_key == source_key)
+            and (con_id is None or info.trade.contract.conId == con_id)
+            and (role is None or info.role == role)
+            and (
+                execution_model_name is None
+                or info.execution_model_name == execution_model_name
+            )
+        )
+
+    def active(
+        self,
+        *,
+        source_key: str | None = None,
+        contract: ibi.Contract | None = None,
+        role: str | None = None,
+        execution_model_name: str | None = None,
+    ) -> tuple[OrderInfo, ...]:
+        """Query active orders using any supported attribution fields."""
+
+        return self.query(
+            source_key=source_key,
+            contract=contract,
+            role=role,
+            execution_model_name=execution_model_name,
+            active_only=True,
+        )
+
+    def owner_for_contract(
+        self,
+        contract: ibi.Contract,
+        *,
+        role: str | None = None,
+    ) -> str | None:
+        """Return the unambiguous active-order owner for one Contract.
+
+        Args:
+            contract: Concrete qualified Contract used to find active orders.
+            role: Optional exact order-role filter.
+
+        Returns:
+            The execution-model name, or ``None`` when no order matches.
+
+        Raises:
+            RuntimeError: More than one model owns matching active orders.
+        """
+
+        con_id = qualified_contract(contract).conId
+        candidates = {
+            info.execution_model_name
+            for info in self.active(contract=contract, role=role)
+        }
+        return self._one_active_order_model(candidates, f"conId={con_id}")
+
+    @staticmethod
+    def _one_active_order_model(candidates: set[str], identity: str) -> str | None:
+        """Require unambiguous ownership among relevant working orders."""
+
+        if len(candidates) > 1:
+            raise RuntimeError(
+                f"Ambiguous active-order ownership for {identity}: "
+                f"{sorted(candidates)}"
+            )
+        return next(iter(candidates), None)
+
+    def register_rejection(self, model_name: str) -> None:
+        """Count one rejection for the current process, not durable recovery."""
+        self._rejections[model_name] += 1
+
+    def rejection_count(self, model_name: str) -> int:
+        """Return this process's rejection count for a configured model."""
+        return self._rejections.get(model_name, 0)

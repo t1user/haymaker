@@ -220,13 +220,13 @@ class FutureRollExecutor(ABC):
 
     def _roll_info(self, state: RollState) -> OrderInfo | None:
         if state.roll_order_id is not None:
-            info = self.book.order_by_id(state.roll_order_id)
+            info = self.book.orders.by_id(state.roll_order_id)
             if info is not None:
                 return info
         return next(
             (
                 info
-                for info in self.book.orders(
+                for info in self.book.orders.query(
                     role=StandardOrderRole.ROLL,
                     execution_model_name=self.name,
                 )
@@ -271,7 +271,7 @@ class FutureRollExecutor(ABC):
 
         if not self._fully_filled(trade):
             return
-        state = self.book.roll_state(series_key)
+        state = self.book.rolls.for_series(series_key)
         if state is None or state.stage is not FutureRollStage.ROLL_ORDER_ACTIVE:
             return
         filled = self.book.update_roll(
@@ -301,7 +301,7 @@ class FutureRollExecutor(ABC):
     def onRollCancelledEvent(self, trade: ibi.Trade, series_key: str) -> None:
         """Block automatic repair when a roll terminates before full Fill."""
 
-        state = self.book.roll_state(series_key)
+        state = self.book.rolls.for_series(series_key)
         if state is None or state.stage is not FutureRollStage.ROLL_ORDER_ACTIVE:
             return
         if self._fully_filled(trade):
@@ -362,8 +362,8 @@ class DirectFutureRollExecutor(FutureRollExecutor):
     def holdings(self) -> tuple[RollHolding, ...]:
         """Return each non-flat concrete Future with its current target owner."""
         result = []
-        for contract, quantity in self.book.logical_positions().items():
-            state = self.book.target_state(contract)
+        for contract, quantity in self.book.positions.by_contract().items():
+            state = self.book.targets.for_contract(contract)
             if isinstance(contract, ibi.Future) and state is not None and quantity:
                 result.append(
                     RollHolding(
@@ -406,10 +406,10 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         A custom executor may override this allocation policy. Return absolute
         TargetStates; the executor saves them before any roll submission.
         """
-        old = self.book.target_state(state.old_contract)
+        old = self.book.targets.for_contract(state.old_contract)
         if old is None:
             raise ValueError("Direct roll requires the old Contract's TargetState")
-        new = self.book.target_state(state.new_contract)
+        new = self.book.targets.for_contract(state.new_contract)
         now = datetime.now(timezone.utc)
         return (
             replace(old, target_quantity=0, target_created_at=now, updated_at=now),
@@ -447,7 +447,7 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         active = tuple(
             info
             for contract in (state.old_contract, state.new_contract)
-            for info in self.book.active_orders(
+            for info in self.book.orders.active(
                 contract=contract, role=StandardOrderRole.TARGET_ADJUSTMENT
             )
         )
@@ -458,7 +458,7 @@ class DirectFutureRollExecutor(FutureRollExecutor):
             for info in active:
                 self._bind_adjustment(info.trade, state.series_key)
             return
-        quantity = self.book.aggregate_quantity(state.old_contract)
+        quantity = self.book.positions.quantity(state.old_contract)
         if not quantity:
             self._complete(state)
             return
@@ -505,15 +505,15 @@ class DirectFutureRollExecutor(FutureRollExecutor):
             loop.call_soon(self._resume_series, series_key)
 
     def _resume_series(self, series_key: str) -> None:
-        state = self.book.roll_state(series_key)
+        state = self.book.rolls.for_series(series_key)
         if state is not None:
             self.advance(state)
 
     def _after_roll_fill(self, state: RollState, trade: ibi.Trade) -> None:
-        current = self.book.roll_state(state.series_key)
+        current = self.book.rolls.for_series(state.series_key)
         if current is None or current.stage is not FutureRollStage.ROLL_FILLED:
             return
-        if self.book.aggregate_quantity(current.old_contract):
+        if self.book.positions.quantity(current.old_contract):
             self._block(current, "Direct roll did not flatten its old Contract")
             return
         if not current.target_transfers:
@@ -551,7 +551,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
 
         holdings: list[RollHolding] = []
         policies = self.controller.future_roll_policies
-        for state in self.book.position_states().values():
+        for state in self.book.positions.source_states().values():
             if (
                 not state.quantity
                 or not isinstance(state.contract, ibi.Future)
@@ -685,7 +685,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         active_work = tuple(
             info
             for participant in remaining
-            for info in self.book.active_orders(source_key=participant.source_key)
+            for info in self.book.orders.active(source_key=participant.source_key)
             if info.role in {StandardOrderRole.OPEN, StandardOrderRole.CLOSE}
         )
         if active_work:
@@ -701,7 +701,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             return None
         pending = []
         for participant in remaining:
-            position = self.book.position_state(participant.source_key or "")
+            position = self.book.positions.for_source(participant.source_key or "")
             if position is None or (
                 position.quantity
                 and (
@@ -779,7 +779,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
 
     def _resume_pending(self, series_key: str) -> None:
         """Load current durable work after broker accounting callbacks settle."""
-        state = self.book.roll_state(series_key)
+        state = self.book.rolls.for_series(series_key)
         if state is not None:
             self.advance(state)
 
@@ -801,7 +801,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         )
 
     async def _load_reference_price(self, series_key: str) -> None:
-        state = self.book.roll_state(series_key)
+        state = self.book.rolls.for_series(series_key)
         if state is None or state.stage is not FutureRollStage.LOADING_REFERENCE_PRICE:
             self._reference_price_tasks.discard(series_key)
             return
@@ -836,7 +836,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
     def _move_position_and_cancel_protection(
         self, state: RollState, trade: ibi.Trade | None
     ) -> None:
-        current = self.book.roll_state(state.series_key)
+        current = self.book.rolls.for_series(state.series_key)
         if current is None or current.stage is not FutureRollStage.ROLL_FILLED:
             return
         state = current
@@ -857,7 +857,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
                     "Bracket roll lacks complete normalized Fill evidence",
                 )
                 return
-        position = self.book.position_state(participant.source_key)
+        position = self.book.positions.for_source(participant.source_key)
         if (
             position is None
             or position.position_id != participant.position_id
@@ -881,7 +881,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             return
         protections = tuple(
             info
-            for info in self.book.active_orders(source_key=participant.source_key)
+            for info in self.book.orders.active(source_key=participant.source_key)
             if info.role in {StandardOrderRole.STOP_LOSS, StandardOrderRole.TAKE_PROFIT}
         )
         if not any(info.role == StandardOrderRole.STOP_LOSS for info in protections):
@@ -902,7 +902,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         )
         for info in protections:
             self._cancel_protection(info, state.series_key)
-        current = self.book.roll_state(cancelling.series_key)
+        current = self.book.rolls.for_series(cancelling.series_key)
         if (
             current is not None
             and current.stage is FutureRollStage.CANCELLING_PROTECTION
@@ -925,12 +925,12 @@ class BracketFutureRollExecutor(FutureRollExecutor):
     def onProtectionCancelledEvent(self, trade: ibi.Trade, series_key: str) -> None:
         """Continue once an old protective order is terminal."""
 
-        state = self.book.roll_state(series_key)
+        state = self.book.rolls.for_series(series_key)
         if state is not None:
             self._continue_cancellation(state)
 
     def _continue_cancellation(self, state: RollState) -> None:
-        current = self.book.roll_state(state.series_key)
+        current = self.book.rolls.for_series(state.series_key)
         if (
             current is None
             or current.stage is not FutureRollStage.CANCELLING_PROTECTION
@@ -940,7 +940,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         active = tuple(
             info
             for order_id in state.old_protection_order_ids
-            if (info := self.book.order_by_id(order_id)) is not None and info.active
+            if (info := self.book.orders.by_id(order_id)) is not None and info.active
         )
         if active:
             for info in active:
@@ -955,7 +955,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             (
                 info
                 for order_id in state.old_protection_order_ids
-                if (info := self.book.order_by_id(order_id)) is not None
+                if (info := self.book.orders.by_id(order_id)) is not None
                 and info.role == role
             ),
             None,
@@ -1026,7 +1026,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             else state.replacement_take_profit_order_id
         )
         if order_id is not None:
-            info = self.book.order_by_id(order_id)
+            info = self.book.orders.by_id(order_id)
             if info is not None:
                 return info
         participant = state.current_participant
@@ -1035,7 +1035,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         return next(
             (
                 info
-                for info in self.book.orders(
+                for info in self.book.orders.query(
                     source_key=participant.source_key,
                     contract=state.new_contract,
                     role=role,
@@ -1049,12 +1049,12 @@ class BracketFutureRollExecutor(FutureRollExecutor):
     def onReplacementStopStatusEvent(self, trade: ibi.Trade, series_key: str) -> None:
         """Advance only after the replacement stop is active or filled."""
 
-        state = self.book.roll_state(series_key)
+        state = self.book.rolls.for_series(series_key)
         if state is not None:
             self._continue_stop_installation(state)
 
     def _continue_stop_installation(self, state: RollState) -> None:
-        current = self.book.roll_state(state.series_key)
+        current = self.book.rolls.for_series(state.series_key)
         if current is None or current.stage is not FutureRollStage.INSTALLING_STOP:
             return
         state = current
@@ -1132,7 +1132,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         self._finish_participant(installed)
 
     def _continue_take_profit_installation(self, state: RollState) -> None:
-        current = self.book.roll_state(state.series_key)
+        current = self.book.rolls.for_series(state.series_key)
         if (
             current is None
             or current.stage is not FutureRollStage.INSTALLING_TAKE_PROFIT
@@ -1155,7 +1155,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         self._install_take_profit(state, stop_info)
 
     def _finish_participant(self, state: RollState) -> None:
-        current = self.book.roll_state(state.series_key)
+        current = self.book.rolls.for_series(state.series_key)
         if (
             current is None
             or current.participant_index != state.participant_index

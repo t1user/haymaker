@@ -507,7 +507,7 @@ class BracketExecutionModel(ExecutionModel):
                 f"quantity {effective} and target {target.target_quantity}; "
                 f"expected {expected.value}"
             )
-        state = self.book.position_state(self.source_key)
+        state = self.book.positions.for_source(self.source_key)
         if (
             state is not None
             and state.target_created_at is not None
@@ -520,7 +520,7 @@ class BracketExecutionModel(ExecutionModel):
                 execution_model_name=self.name,
             )
         elif state.execution_model_name != self.name and (
-            state.quantity or self.book.active_orders(source_key=self.source_key)
+            state.quantity or self.book.orders.active(source_key=self.source_key)
         ):
             raise ValueError(
                 f"Source {self.source_key!r} is owned by "
@@ -545,14 +545,14 @@ class BracketExecutionModel(ExecutionModel):
     def recover(self) -> None:
         """Resume the persisted source target without replaying old intent."""
 
-        state = self.book.position_state(self.source_key)
+        state = self.book.positions.for_source(self.source_key)
         if state is not None:
             if state.execution_model_name != self.name:
                 raise RuntimeError(
                     f"Persisted source {self.source_key!r} requires missing "
                     f"model {state.execution_model_name!r}"
                 )
-            for info in self.book.active_orders(source_key=self.source_key):
+            for info in self.book.orders.active(source_key=self.source_key):
                 if info.execution_model_name != self.name:
                     continue
                 if info.role == StandardOrderRole.OPEN:
@@ -586,8 +586,8 @@ class BracketExecutionModel(ExecutionModel):
         # Unknown broker orders must be resolved before deciding a leg is absent.
         if any(
             trade.contract == state.contract
-            and self.book.order_by_id(trade.order.orderId) is None
-            and self.book.order_by_perm_id(trade.order.permId) is None
+            and self.book.orders.by_id(trade.order.orderId) is None
+            and self.book.orders.by_perm_id(trade.order.permId) is None
             for trade in self.ib.openTrades()
         ):
             raise RuntimeError("Unattributed broker orders prevent bracket recovery")
@@ -603,13 +603,13 @@ class BracketExecutionModel(ExecutionModel):
 
     def _initial_protection(self) -> tuple[PositionState, tuple[OrderInfo, ...]] | None:
         """Select an unprotected episode without interfering with other stages."""
-        state = self.book.position_state(self.source_key)
+        state = self.book.positions.for_source(self.source_key)
         if state is None or not state.quantity:
             return None
         if state.execution_model_name != self.name:
             raise RuntimeError(f"Source {self.source_key!r} belongs to another model")
         orders = self._episode_orders(state)
-        if self.book.roll_state_for_source(self.source_key) is not None or any(
+        if self.book.rolls.for_source(self.source_key) is not None or any(
             info.role == StandardOrderRole.STOP_LOSS
             or (
                 info.active
@@ -626,7 +626,7 @@ class BracketExecutionModel(ExecutionModel):
             raise RuntimeError("Held position has no episode identity")
         return tuple(
             info
-            for info in self.book.orders(source_key=self.source_key)
+            for info in self.book.orders.query(source_key=self.source_key)
             if info.position_id == state.position_id
         )
 
@@ -660,14 +660,14 @@ class BracketExecutionModel(ExecutionModel):
         return values
 
     def _converge(self) -> None:
-        if self.book.roll_state_for_source(self.source_key) is not None:
+        if self.book.rolls.for_source(self.source_key) is not None:
             return
-        state = self.book.position_state(self.source_key)
+        state = self.book.positions.for_source(self.source_key)
         if state is None or state.target_quantity is None:
             return
         active_adjustments = tuple(
             info
-            for info in self.book.active_orders(source_key=self.source_key)
+            for info in self.book.orders.active(source_key=self.source_key)
             if info.role
             in {
                 StandardOrderRole.OPEN,
@@ -790,7 +790,7 @@ class BracketExecutionModel(ExecutionModel):
 
         groups = {
             info.trade.order.ocaGroup
-            for info in self.book.active_orders(source_key=self.source_key)
+            for info in self.book.orders.active(source_key=self.source_key)
             if info.role
             in {
                 StandardOrderRole.STOP_LOSS,
@@ -844,9 +844,9 @@ class BracketExecutionModel(ExecutionModel):
         if pending is None:
             return
         state, orders = pending
-        info = self.book.order_by_id(
+        info = self.book.orders.by_id(
             entry_trade.order.orderId
-        ) or self.book.order_by_perm_id(entry_trade.order.permId)
+        ) or self.book.orders.by_perm_id(entry_trade.order.permId)
         if info is None:
             raise RuntimeError("Entry order has no persisted evidence")
         if info.position_id != state.position_id:

@@ -395,6 +395,11 @@ async def test_live_runtime_close_warns_about_active_target_adjustments(
     )
 
     class FakeBook:
+        def __init__(self):
+            """Expose the collection queries used by final shutdown checks."""
+            self.orders = SimpleNamespace(active=self.active_orders)
+            self.rolls = SimpleNamespace(all=self.roll_states)
+
         def active_orders(self, *, role=None):
             events.append(("query", role))
             return (info,) if role == StandardOrderRole.TARGET_ADJUSTMENT else ()
@@ -434,6 +439,11 @@ async def test_live_runtime_close_is_quiet_without_target_adjustments(
     events: list[object] = []
 
     class FakeBook:
+        def __init__(self):
+            """Expose the collection queries used by final shutdown checks."""
+            self.orders = SimpleNamespace(active=self.active_orders)
+            self.rolls = SimpleNamespace(all=self.roll_states)
+
         def active_orders(self, *, role=None):
             events.append(("query", role))
             return ()

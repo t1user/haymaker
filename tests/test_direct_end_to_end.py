@@ -91,14 +91,14 @@ async def test_direct_expiries_are_independent_during_target_supersession(direct
     assert reduction.order.totalQuantity == 2
     await broker.fill(reduction)
     await broker.fill(second)
-    assert runtime.book.aggregate_quantity(first.contract) == 1
-    assert runtime.book.aggregate_quantity(second.contract) == 2
-    assert broker.quantities == dict(runtime.book.logical_positions())
-    assert runtime.book.position_state("alpha") is None
+    assert runtime.book.positions.quantity(first.contract) == 1
+    assert runtime.book.positions.quantity(second.contract) == 2
+    assert broker.quantities == dict(runtime.book.positions.by_contract())
+    assert runtime.book.positions.for_source("alpha") is None
     # A replayed execution is not another position change.
     broker.execDetailsEvent.emit(first, first.fills[0])
     await settle_events()
-    assert runtime.book.aggregate_quantity(first.contract) == 1
+    assert runtime.book.positions.quantity(first.contract) == 1
 
 
 async def test_one_source_can_reallocate_between_concrete_contracts(direct):
@@ -114,9 +114,9 @@ async def test_one_source_can_reallocate_between_concrete_contracts(direct):
     assert opening.contract.conId == 102
     await broker.fill(close)
     await broker.fill(opening)
-    assert runtime.book.target_state(old.contract).target_quantity == 0
-    assert runtime.book.aggregate_quantity(old.contract) == 0
-    assert runtime.book.aggregate_quantity(opening.contract) == 3
+    assert runtime.book.targets.for_contract(old.contract).target_quantity == 0
+    assert runtime.book.positions.quantity(old.contract) == 0
+    assert runtime.book.positions.quantity(opening.contract) == 3
 
 
 async def test_completion_feedback_observes_accounted_fills_and_repeats_on_restart(
@@ -128,7 +128,7 @@ async def test_completion_feedback_observes_accounted_fills_and_repeats_on_resta
 
     def onFeedback(target):
         """Observe Book quantities at the moment completion is delivered."""
-        completed.append((target, runtime.book.aggregate_quantity(target.contract)))
+        completed.append((target, runtime.book.positions.quantity(target.contract)))
 
     portfolio.feedbackEvent += onFeedback
     portfolio.onData(signal("alpha", 101, 2))
@@ -164,4 +164,4 @@ async def test_portfolio_can_wait_for_flat_before_opening_another_contract(direc
     assert len(broker.submitted) == 2
     await broker.fill(close, 1)
     assert broker.submitted[-1].contract.conId == 102
-    assert runtime.book.aggregate_quantity(close.contract) == 0
+    assert runtime.book.positions.quantity(close.contract) == 0

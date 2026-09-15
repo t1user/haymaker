@@ -34,10 +34,7 @@ def test_portfolio_state_mixin_loads_only_when_explicitly_requested(atom_runtime
     first.save_state({"allocations": {"alpha": 2}})
     second = SavedPortfolio()
     assert second.load_state() == {"allocations": {"alpha": 2}}
-    assert (
-        atom_runtime.book.load_portfolio_state("test_allocations")
-        == second.load_state()
-    )
+    assert atom_runtime.book.portfolios.load("test_allocations") == second.load_state()
 
 
 def test_portfolio_state_mixin_allows_independent_backend(atom_runtime):
@@ -55,7 +52,7 @@ def test_portfolio_state_mixin_allows_independent_backend(atom_runtime):
     portfolio = Independent()
     portfolio.save_state({"alpha": 1})
     assert portfolio.load_state() == {"alpha": 1}
-    assert atom_runtime.book.load_portfolio_state(portfolio.portfolio_key) is None
+    assert atom_runtime.book.portfolios.load(portfolio.portfolio_key) is None
 
 
 def test_portfolio_blueprint_positions_query_filled_not_desired_quantities(

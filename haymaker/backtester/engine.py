@@ -624,12 +624,12 @@ class Backtester:
         }
         held = [
             contract
-            for contract in runtime.book.logical_positions()
+            for contract in runtime.book.positions.by_contract()
             if contract.secType == "FUT" and contract.conId not in allowed
         ]
         working = [
             info.trade.contract
-            for info in runtime.book.active_orders()
+            for info in runtime.book.orders.active()
             if info.trade.contract.secType == "FUT"
             and info.trade.contract.conId not in allowed
         ]

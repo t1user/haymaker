@@ -121,9 +121,13 @@ The research package is intentionally separate from live execution. It works dir
   blotter access,
   and one ordered critical persistence queue. Balance queries read current state;
   reconstruction verifies/repairs balances at startup and explicit reset.
-  Record codecs live in `orders.py`, `positions.py`, `targets.py` and `rolls.py`;
-  `persistence.py` owns the shared fail-stop writer. `core.py` coordinates
-  accounting and restoration. Book performs no broker calls or allocation.
+  Each named module owns its records, codecs, queries and persistence semantics:
+  `orders.py`, `positions.py`, `targets.py`, `rolls.py`, `portfolio.py`.
+  `persistence.py` owns the single shared fail-stop writer, not domain CRUD.
+  `core.py` coordinates accounting mutations, one-pass restoration and projection
+  repair. Callers query the named Book owners; accounting mutations remain Book
+  operations. SyncCoordinator chooses safe corrections and PositionState defines
+  their field changes. Book performs no broker calls or allocation.
 - `haymaker/validators.py`: shared primitive normalization for aware datetimes,
   finite numbers, read-only mapping copies, non-empty strings, and IB Contract
   identity, plus IB request/order field validators. Domain-specific validation

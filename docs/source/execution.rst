@@ -526,8 +526,8 @@ interpret ``as_of``; concrete policies own those decisions.
 Portfolio accounting and optional state
 ---------------------------------------
 
-Use ``self.book.aggregate_quantity(contract)`` for filled quantity in an exact
-Contract and ``self.book.active_orders(contract=contract)`` for working orders.
+Use ``self.book.positions.quantity(contract)`` for filled quantity in an exact
+Contract and ``self.book.orders.active(contract=contract)`` for working orders.
 ``self.positions_for_blueprint(signal.contract)`` returns filled quantities
 across all registered members of that blueprint, including held past expiries.
 The query requires initialized registry membership. Neither desired targets
@@ -535,9 +535,9 @@ nor working quantities are actual fills.
 
 Both execution modes use the same maintained Contract balances. These queries
 read current state; they do not scan historical executions or contact IB.
-``self.book.logical_positions()`` returns a new mapping of all non-flat net
+``self.book.positions.by_contract()`` returns a new mapping of all non-flat net
 balances by concrete Contract. For individual one-to-one episodes, use
-``self.book.position_state(source_key)`` instead.
+``self.book.positions.for_source(source_key)`` instead.
 
 In direct mode, allocation to each ``source_key`` belongs to your Portfolio.
 Net fills cannot determine how much of a combined broker position belongs to
@@ -841,6 +841,33 @@ updated as episode, order and roll records change. During a bracket roll,
 physical movement remains distinct from serial episode updates so quantities
 are not counted twice.
 
+Query the collection that owns the state you need:
+
+.. code-block:: python
+
+   episode = self.book.positions.for_source("breakout")  # None if unknown
+   sources = self.book.positions.source_states()  # read-only source -> state
+   quantity = self.book.positions.quantity(contract)  # filled net, excluding orders
+   holdings = self.book.positions.by_contract()  # non-flat Contract -> quantity
+   working = self.book.orders.active(contract=contract)
+   order = self.book.orders.by_id(order_id)  # permId fallback: by_perm_id(...)
+   target = self.book.targets.for_contract(contract)
+   roll = self.book.rolls.for_series(series_key)
+
+Source states describe one-to-one episodes; they are not inferred per-source
+allocations for a direct Portfolio. ``source_states_for_contract(contract)``
+returns the non-flat episodes for a concrete Contract, while ``quantity`` nets
+all accounted holdings. ``Book.effective_quantity(source_key)`` includes relevant
+working episode orders when that is the desired view.
+
+Book coordinates accounting writes such as ``apply_fill``, ``update_position``,
+``update_target`` and ``update_roll``. Do not mutate a returned live OrderInfo or
+call collection-private mutation hooks to bypass these operations. Each owner
+keeps its record codecs and persistence semantics nearby, but all use the same
+ordered writer. A custom Portfolio may save opaque normalized recovery mappings
+through ``book.portfolios.save(key, mapping)`` and ``load(key)``; this does not
+make its allocation policy part of Book.
+
 Book persists balances in the existing ``state`` collection under
 ``balance:{conId}``, after the records establishing them in its critical
 ``DRAIN`` queue. Startup verifies the balances once against saved accounting
@@ -889,6 +916,21 @@ not recreate a position that reconciliation intentionally removed.
 .. autoclass:: haymaker.book.TargetState
 
 .. autoclass:: haymaker.book.ContractPosition
+
+.. autoclass:: haymaker.book.orders.OrderStore
+   :members: by_id, by_perm_id, query, active
+
+.. autoclass:: haymaker.book.positions.PositionStore
+   :members: for_source, source_states, source_states_for_contract, quantity, by_contract
+
+.. autoclass:: haymaker.book.targets.TargetStore
+   :members: for_contract, all
+
+.. autoclass:: haymaker.book.rolls.RollStore
+   :members: for_series, for_source, for_contract, all
+
+.. autoclass:: haymaker.book.portfolio.PortfolioStateStore
+   :members: save, load
 
 .. autoclass:: haymaker.controller.Controller
    :members: trade, cancel

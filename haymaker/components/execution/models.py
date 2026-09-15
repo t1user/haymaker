@@ -185,10 +185,10 @@ class SerialTargetExecutionModel(ExecutionModel):
         """Persist the newest concrete target without changing its Contract."""
         if target.source_key is not None:
             raise ValueError("SerialTargetExecutionModel does not accept source_key")
-        current = self.book.target_state(target.contract)
+        current = self.book.targets.for_contract(target.contract)
         if current is not None and target.created_at < current.target_created_at:
             return False
-        owner = self.book.active_order_model_for_contract(
+        owner = self.book.orders.owner_for_contract(
             target.contract, role=StandardOrderRole.TARGET_ADJUSTMENT
         )
         if owner is not None and owner != self.name:
@@ -208,8 +208,8 @@ class SerialTargetExecutionModel(ExecutionModel):
 
     def recover(self) -> None:
         """Resume persisted concrete targets, rebinding active broker work."""
-        for state in self.book.target_states(self.name):
-            for info in self.book.active_orders(
+        for state in self.book.targets.all(self.name):
+            for info in self.book.orders.active(
                 contract=state.contract, role=StandardOrderRole.TARGET_ADJUSTMENT
             ):
                 self._bind_adjustment(info.trade)
@@ -224,16 +224,16 @@ class SerialTargetExecutionModel(ExecutionModel):
         )
 
     def _converge(self, contract: ibi.Contract) -> None:
-        if self.book.roll_state_for_contract(contract) is not None:
+        if self.book.rolls.for_contract(contract) is not None:
             return
-        if self.book.active_orders(
+        if self.book.orders.active(
             contract=contract, role=StandardOrderRole.TARGET_ADJUSTMENT
         ):
             return
-        state = self.book.target_state(contract)
+        state = self.book.targets.for_contract(contract)
         if state is None or state.execution_model_name != self.name:
             return
-        delta = state.target_quantity - self.book.aggregate_quantity(contract)
+        delta = state.target_quantity - self.book.positions.quantity(contract)
         if not delta:
             self._notify_target_reached(
                 PositionTarget(

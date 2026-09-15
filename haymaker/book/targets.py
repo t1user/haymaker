@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Collection
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -16,7 +16,9 @@ from ..validators import (
     non_empty_string,
     qualified_contract,
 )
-from .persistence import utc_now
+from types import MappingProxyType
+from ..saver import AbstractBaseSaver
+from .persistence import utc_now, PersistenceWriter
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -81,4 +83,82 @@ class TargetState:
             target_created_at=decode_tree(data["target_created_at"]),
             fill_evidence_start_at=decode_tree(data.get("fill_evidence_start_at")),
             updated_at=decode_tree(data["updated_at"]),
+        )
+
+
+class TargetStore:
+    """Own latest concrete targets and durable reset cutoffs, not allocation policy."""
+
+    def __init__(self, saver: AbstractBaseSaver, writer: PersistenceWriter) -> None:
+        """Share Book's state collection and ordered writer."""
+        self._saver = saver
+        self._writer = writer
+        self._items: dict[int, TargetState] = {}
+        self._cutoffs: dict[int, datetime] = {}
+
+    @property
+    def cutoffs(self) -> Mapping[int, datetime]:
+        """Expose read-only reset boundaries used by position accounting."""
+        return MappingProxyType(self._cutoffs)
+
+    def for_contract(self, contract: ibi.Contract) -> TargetState | None:
+        """Return the latest setpoint for one qualified concrete Contract."""
+        return self._items.get(qualified_contract(contract).conId)
+
+    def _put(self, state: TargetState) -> TargetState:
+        """Persist an accepted latest target without overwriting newer decisions."""
+        current = self._items.get(state.contract.conId)
+        if current is not None and state.target_created_at < current.target_created_at:
+            return current
+        cutoff = self._cutoffs.get(state.contract.conId)
+        if cutoff is not None:
+            state = replace(state, fill_evidence_start_at=cutoff)
+        self._writer.save(self._saver, state.encode())
+        self._items[state.contract.conId] = state
+        if state.fill_evidence_start_at is not None:
+            self._cutoffs[state.contract.conId] = state.fill_evidence_start_at
+        return state
+
+    def _restore(self, document: Mapping[str, Any]) -> None:
+        """Restore a target or its cleared tombstone without issuing live writes."""
+        state = TargetState.decode(document)
+        if state.fill_evidence_start_at is not None:
+            self._cutoffs[state.contract.conId] = state.fill_evidence_start_at
+        if not document.get("cleared", False):
+            self._items[state.contract.conId] = state
+
+    def _clear(self, contracts: Collection[ibi.Contract], cleared_at: datetime) -> None:
+        """Persist tombstones, including residual exposure without a prior target."""
+        targets = dict(self._items)
+        for contract in contracts:
+            targets.setdefault(
+                contract.conId,
+                TargetState(
+                    execution_model_name="reset",
+                    contract=contract,
+                    target_quantity=0,
+                    target_created_at=cleared_at,
+                ),
+            )
+        for target in targets.values():
+            document = replace(
+                target,
+                target_quantity=0,
+                target_created_at=cleared_at,
+                fill_evidence_start_at=cleared_at,
+                updated_at=cleared_at,
+            ).encode()
+            document["cleared"] = True
+            self._writer.save(self._saver, document)
+            self._cutoffs[target.contract.conId] = cleared_at
+        self._items.clear()
+
+    def all(self, execution_model_name: str | None = None) -> tuple[TargetState, ...]:
+        """Return recovered direct targets, optionally restricted by owner."""
+
+        return tuple(
+            state
+            for state in self._items.values()
+            if execution_model_name is None
+            or state.execution_model_name == execution_model_name
         )

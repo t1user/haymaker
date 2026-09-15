@@ -143,6 +143,15 @@ and distinguish pre-existing failures from regressions.
   optional blotter access. It performs neither broker calls nor Portfolio
   calculations. Controller owns broker submission/cancellation, immediate
   OrderInfo registration, rebinding, fills/commissions and reconciliation.
+- `haymaker/book/` keeps records, codecs and collection semantics together:
+  `orders.py`, `positions.py`, `targets.py`, `rolls.py`, and `portfolio.py`.
+  Query through `book.orders/positions/targets/rolls/portfolios`. Book coordinates
+  accounting mutations across owners; their private mutation hooks must not be
+  called by components or Controller. All owners share `PersistenceWriter`;
+  never give them separate queues. Restoration reads each physical collection
+  once, delegates decoding, then repairs dependent projections before trading.
+  SyncCoordinator chooses safe broker corrections; PositionState defines their
+  field changes and Book persists their accounting effects.
 - Persist complete Trade diagnostics and authoritative normalized
   Fill/Execution evidence with actual IB orderId/clientId/permId. Rebind by
   orderId with permId fallback; deduplicate normally by execId. Commission
@@ -161,7 +170,9 @@ and distinguish pre-existing failures from regressions.
   evidence. An explicit reset retains fills and persists concrete-target
   cutoffs so old fills do not resurrect cleared direct exposure.
 - Both execution modes use maintained `ContractPosition` balances through
-  `aggregate_quantity` and `logical_positions`; normal queries never scan fills.
+  `book.positions.quantity(contract)` and `book.positions.by_contract()`;
+  `for_source`/`source_states` expose the separate one-to-one episode view.
+  Normal queries never scan fills.
   Update balances with the underlying episode/order/roll mutation, not on read.
   Startup verifies the shared balances against durable accounting records and
   repairs interrupted balance writes. Preserve one-to-one broker corrections;

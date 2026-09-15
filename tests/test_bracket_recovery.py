@@ -102,17 +102,17 @@ async def test_offline_entry_recovers_weighted_price_before_remediation(
         # Earlier fills can have aged out of broker history but remain in Book.
         monkeypatch.setattr(replacement, "fills", lambda: [last, last])
     assert await controller.run() is SyncOutcome.OK
-    assert fresh.book.position_state("alpha").quantity == 3
+    assert fresh.book.positions.for_source("alpha").quantity == 3
     assert len(replacement.submitted) == 3
     stop, take_profit = replacement.submitted[1:]
     assert stop.order.auxPrice == 91  # weighted entry 101 minus 2 * saved ATR 5
     assert take_profit.order.lmtPrice == 121
     assert stop.order.totalQuantity == take_profit.order.totalQuantity == 3
     assert stop.order.ocaGroup == take_profit.order.ocaGroup
-    recovered = fresh.book.order_by_id(1)
+    recovered = fresh.book.orders.by_id(1)
     assert recovered.trade.orderStatus.avgFillPrice == 101
     assert len(recovered.fills) == 2
-    assert recovered.position_id == fresh.book.position_state("alpha").position_id
+    assert recovered.position_id == fresh.book.positions.for_source("alpha").position_id
     assert fresh.book.blotter is None
     assert await controller.sync() is SyncOutcome.OK
     model.recover()
@@ -131,7 +131,7 @@ async def test_recover_after_fill_accounted_but_callback_missed(
     assert await controller.run() is SyncOutcome.OK
     assert len(replacement.submitted) == 3
     assert replacement.submitted[1].order.auxPrice == 93
-    assert fresh.book.position_state("alpha").quantity == 3
+    assert fresh.book.positions.for_source("alpha").quantity == 3
 
 
 async def test_live_duplicate_completion_uses_accounted_price(entry_path):
@@ -158,7 +158,7 @@ async def test_recovery_between_leg_submissions(
     """A lone stop is sufficient; a lone take-profit lends its existing OCA group."""
     runtime, broker, _, _ = entry_path
     await broker.fill(broker.submitted[0], notify_filled=False)
-    state = runtime.book.position_state("alpha")
+    state = runtime.book.positions.for_source("alpha")
     runtime.controller.trade(
         state.contract,
         ibi.Order(
@@ -178,7 +178,7 @@ async def test_recovery_between_leg_submissions(
     assert await controller.run() is SyncOutcome.OK
     expected_count = 2 if surviving_role == StandardOrderRole.STOP_LOSS else 3
     assert len(replacement.submitted) == expected_count
-    stops = fresh.book.active_orders(
+    stops = fresh.book.orders.active(
         source_key="alpha", role=StandardOrderRole.STOP_LOSS
     )
     assert len(stops) == 1
@@ -204,14 +204,14 @@ async def test_partial_entry_recovers_binding_but_not_brackets(
     assert len(replacement.submitted) == 1
     await replacement.fill(trade)
     assert len(replacement.submitted) == 3
-    assert fresh.book.position_state("alpha").quantity == 3
+    assert fresh.book.positions.for_source("alpha").quantity == 3
 
 
 async def test_closed_episode_is_not_protected_again(entry_path, restart_entry):
     """An entry and its close may both complete before protection recovery runs."""
     runtime, broker, _, _ = entry_path
     await broker.fill(broker.submitted[0], notify_filled=False)
-    state = runtime.book.position_state("alpha")
+    state = runtime.book.positions.for_source("alpha")
     close = runtime.controller.trade(
         state.contract,
         ibi.MarketOrder("SELL", 3),
@@ -223,7 +223,7 @@ async def test_closed_episode_is_not_protected_again(entry_path, restart_entry):
     await broker.fill(close, notify_events=False)
     fresh, replacement, controller, _ = restart_entry(runtime, broker)
     assert await controller.run() is SyncOutcome.OK
-    assert fresh.book.position_state("alpha").quantity == 0
+    assert fresh.book.positions.for_source("alpha").quantity == 0
     assert len(replacement.submitted) == 2
 
 
@@ -231,7 +231,7 @@ async def test_active_close_keeps_its_own_sequencing(entry_path, restart_entry):
     """Remove policy must not submit a second close during missed-entry recovery."""
     runtime, broker, _, _ = entry_path
     await broker.fill(broker.submitted[0], notify_filled=False)
-    state = runtime.book.position_state("alpha")
+    state = runtime.book.positions.for_source("alpha")
     runtime.controller.trade(
         state.contract,
         ibi.MarketOrder("SELL", 3),
@@ -256,7 +256,7 @@ async def test_previous_stop_is_not_recreated(entry_path, restart_entry):
     assert await controller.run() is SyncOutcome.OK
     model.recover()
     assert len(replacement.submitted) == 3
-    assert not fresh.book.active_orders(
+    assert not fresh.book.orders.active(
         source_key="alpha", role=StandardOrderRole.STOP_LOSS
     )
 
@@ -267,9 +267,9 @@ async def test_incomplete_evidence_fails_without_fabricated_stop(entry_path, mis
     runtime, broker, model, _ = entry_path
     await broker.fill(broker.submitted[0], notify_filled=False)
     if missing == "fills":
-        runtime.book.order_by_id(1).fills = ()
+        runtime.book.orders.by_id(1).fills = ()
     else:
-        state = runtime.book.position_state("alpha")
+        state = runtime.book.positions.for_source("alpha")
         runtime.book.update_position(replace(state, bracket_inputs={}))
     with pytest.raises((RuntimeError, KeyError), match="evidence|bracket input"):
         model.recover_protection()
@@ -282,13 +282,13 @@ async def test_controller_disables_on_initial_protection_recovery_failure(
     """Ignore policy does not conceal a failed attempted initial installation."""
     runtime, broker, _, _ = entry_path
     await broker.fill(broker.submitted[0], notify_filled=False)
-    state = runtime.book.position_state("alpha")
+    state = runtime.book.positions.for_source("alpha")
     runtime.book.update_position(replace(state, bracket_inputs={}))
     fresh, replacement, controller, _ = restart_entry(runtime, broker)
     controller.missing_brackets = "ignore"
     assert await controller.run() is SyncOutcome.FAILED
     assert controller._trading_disabled
-    assert fresh.book.position_state("alpha").quantity == 3
+    assert fresh.book.positions.for_source("alpha").quantity == 3
     assert len(replacement.submitted) == 1
 
 
@@ -296,7 +296,7 @@ async def test_recovery_uses_held_inputs_not_pending_target(entry_path, restart_
     """New target inputs cannot overwrite the original episode's protection basis."""
     runtime, broker, _, _ = entry_path
     await broker.fill(broker.submitted[0], notify_filled=False)
-    state = runtime.book.position_state("alpha")
+    state = runtime.book.positions.for_source("alpha")
     runtime.book.update_position(replace(state, target_bracket_inputs={"atr": 99}))
     _, replacement, controller, _ = restart_entry(runtime, broker)
     assert await controller.run() is SyncOutcome.OK
@@ -317,7 +317,7 @@ async def test_delayed_entry_callback_cannot_protect_replacement_episode(entry_p
     """The source key alone is not enough to authorize installing old brackets."""
     runtime, broker, model, _ = entry_path
     await broker.fill(broker.submitted[0], notify_filled=False)
-    state = runtime.book.position_state("alpha")
+    state = runtime.book.positions.for_source("alpha")
     runtime.book.update_position(replace(state, position_id="new-episode"))
     model.ensure_entry_brackets(broker.submitted[0])
     assert len(broker.submitted) == 1

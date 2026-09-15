@@ -36,7 +36,7 @@ class Terminator:
         await self._wait_for_cancellations(open_trades)
 
         logical_contracts: set[int] = set()
-        for source_key, state in self.controller.book.position_states().items():
+        for source_key, state in self.controller.book.positions.source_states().items():
             if state.quantity and state.contract is not None:
                 logical_trade = self.controller.trade(
                     state.contract,
@@ -67,7 +67,7 @@ class Terminator:
                     ),
                     role=StandardOrderRole.LIQUIDATION,
                     execution_model_name=(
-                        self.controller.book.active_order_model_for_contract(
+                        self.controller.book.orders.owner_for_contract(
                             position.contract
                         )
                         or "reset_liquidation"

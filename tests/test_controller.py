@@ -289,7 +289,7 @@ async def test_new_order_event_reports_unregistered_trade(caplog, atom_runtime):
     )
 
     assert await wait_for_condition(lambda: "123" in caplog.text)
-    assert controller.book.order_by_id(123) is None
+    assert controller.book.orders.by_id(123) is None
 
 
 def test_routine_order_cancellation_is_logged_at_debug(controller, caplog):
@@ -385,7 +385,7 @@ def test_order_rejection_is_visible_and_registered(controller_runtime, caplog):
     controller.onErrEvent(trade.order.orderId, 201, "Rejected", trade.contract)
 
     assert "ORDER REJECTED" in caplog.text
-    assert runtime.book._rejected_orders["brackets"] == 1
+    assert runtime.book.orders.rejection_count("brackets") == 1
 
 
 def test_trade_registers_complete_attribution_immediately(controller_runtime):
@@ -402,7 +402,7 @@ def test_trade_registers_complete_attribution_immediately(controller_runtime):
     )
 
     assert result is trader.trades[0]
-    info = runtime.book.order_by_id(result.order.orderId)
+    info = runtime.book.orders.by_id(result.order.orderId)
     assert info.execution_model_name == "brackets"
     assert info.source_key == "alpha"
     assert info.position_id == "episode"
@@ -423,7 +423,7 @@ def test_disabled_trading_does_not_submit_or_register(controller_runtime):
 
     assert result is None
     assert trader.trades == []
-    assert runtime.book.active_orders() == ()
+    assert runtime.book.orders.active() == ()
 
 
 @pytest.mark.asyncio
@@ -449,8 +449,8 @@ async def test_exec_details_applies_fill_once(controller_runtime):
     await controller.onExecDetailsEvent(trade, execution)
     await controller.onExecDetailsEvent(trade, execution)
 
-    assert runtime.book.position_state("alpha").quantity == 1
-    assert len(runtime.book.order_by_id(trade.order.orderId).fills) == 1
+    assert runtime.book.positions.for_source("alpha").quantity == 1
+    assert len(runtime.book.orders.by_id(trade.order.orderId).fills) == 1
 
 
 @pytest.mark.asyncio
@@ -483,7 +483,7 @@ async def test_offline_zero_order_id_fill_rebinds_by_perm_id(controller_runtime)
     await controller.onExecDetailsEvent(rebound, fill(rebound))
 
     assert rebound.order.orderId == original.order.orderId
-    assert runtime.book.position_state("alpha").quantity == 1
+    assert runtime.book.positions.for_source("alpha").quantity == 1
 
 
 @pytest.mark.asyncio
@@ -505,8 +505,8 @@ async def test_unmatched_zero_order_id_fill_is_not_persisted(
     with caplog.at_level(logging.ERROR):
         await controller.onExecDetailsEvent(trade, execution)
 
-    assert runtime.book.order_by_id(0) is None
-    assert runtime.book.order_by_perm_id(999001) is None
+    assert runtime.book.orders.by_id(0) is None
+    assert runtime.book.orders.by_perm_id(999001) is None
     assert "Cannot persist unknown orderId=0 trade" in caplog.text
 
 
@@ -536,7 +536,7 @@ async def test_manual_trade_has_explicit_role_and_source_attribution(
 
     await controller.onExecDetailsEvent(trade, fill(trade))
 
-    info = runtime.book.order_by_id(-1)
+    info = runtime.book.orders.by_id(-1)
     assert info.role == StandardOrderRole.MANUAL
     assert info.source_key == "alpha"
     assert info.position_id == "episode"
@@ -596,7 +596,7 @@ async def test_commission_report_persists_without_blotter(controller_runtime):
 
     await controller.onCommissionReport(trade, execution, report)
 
-    info = runtime.book.order_by_id(trade.order.orderId)
+    info = runtime.book.orders.by_id(trade.order.orderId)
     assert info.fills[0].commission_report == report
 
 
@@ -616,7 +616,7 @@ async def test_commission_report_skips_unknown_zero_order_id(
     with caplog.at_level(logging.DEBUG):
         await controller.onCommissionReport(trade, execution, report)
 
-    assert runtime.book.order_by_id(0) is None
+    assert runtime.book.orders.by_id(0) is None
     assert runtime.book.blotter is None
 
 
@@ -1174,7 +1174,7 @@ async def test_nuke_liquidation_is_registered_with_episode_attribution(
     await controller.close_positions()
 
     trade = trader.trades[0]
-    info = runtime.book.order_by_id(trade.order.orderId)
+    info = runtime.book.orders.by_id(trade.order.orderId)
     assert trade.order.action == "SELL"
     assert info.role == StandardOrderRole.LIQUIDATION
     assert info.execution_model_name == "brackets"
@@ -1445,7 +1445,7 @@ async def test_fill_between_position_snapshots_retries_and_converges(
     assert request_count == 2
     assert atom_runtime.restart_requests == []
     assert not controller._trading_disabled
-    assert controller.book.position_state("alpha").quantity == 1
+    assert controller.book.positions.for_source("alpha").quantity == 1
 
 
 @pytest.mark.asyncio
@@ -1762,7 +1762,7 @@ async def test_sync_coordinator_back_reports_done_trade_before_restart_gate(
     assert not result
     assert not coordinator.request_restart
     assert await wait_for_condition(
-        lambda: controller.book.position_state("alpha").quantity == 1
+        lambda: controller.book.positions.for_source("alpha").quantity == 1
     )
     assert info.trade is done_trade
 
@@ -1792,7 +1792,7 @@ async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
         result = await SyncCoordinator(controller).run()
 
     assert not result
-    assert controller.book.order_by_id(info.orderId) is info
+    assert controller.book.orders.by_id(info.orderId) is info
     assert not info.active
     assert caplog.messages == [
         f"Pruned stale local order {info.orderId}; order was absent at broker."
@@ -1826,7 +1826,7 @@ async def test_sync_coordinator_requests_restart_before_position_correction(
     assert not result
     assert coordinator.request_restart
     assert corrected == []
-    assert controller.book.position_state("alpha").quantity == 1
+    assert controller.book.positions.for_source("alpha").quantity == 1
 
 
 @pytest.mark.asyncio
@@ -1899,7 +1899,7 @@ async def test_sync_defers_position_correction_while_open_order_is_active(
 
     assert result
     assert not coordinator.request_restart
-    state = controller.book.position_state("alpha")
+    state = controller.book.positions.for_source("alpha")
     assert state is not None
     assert state.quantity == 1
     assert state.target_quantity == 1
@@ -1936,7 +1936,7 @@ async def test_broker_flat_correction_supersedes_target_before_recovery(
     ).run()
 
     assert not result
-    state = controller.book.position_state("alpha")
+    state = controller.book.positions.for_source("alpha")
     assert state is not None
     assert state.quantity == 0
     assert state.target_quantity == 0
@@ -2042,4 +2042,4 @@ def test_rejections_are_scoped_by_execution_model(controller_runtime):
         contract(),
     )
 
-    assert runtime.book._rejected_orders["brackets"] == 1
+    assert runtime.book.orders.rejection_count("brackets") == 1
