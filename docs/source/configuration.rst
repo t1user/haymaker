@@ -121,6 +121,13 @@ Dedicated live switches are ``--cold-start``, ``--reset``, ``--zero``, and
 source CSV as its optional positional argument. Dedicated switches have the
 highest precedence.
 
+``--reset`` requests a reset: close all open positions and cancel pending orders.
+Book state is cleared only after reset completion is confirmed. See
+:ref:`the reset documentation <account-reset>` for completion requirements and
+failure behavior. ``--nuke`` requests a separate emergency reset: it bypasses
+normal submission policies and disables trading, without verifying completion
+or clearing Book state.
+
 .. argparse::
    :module: haymaker.config.cli_options
    :func: get_parser_for_other_module

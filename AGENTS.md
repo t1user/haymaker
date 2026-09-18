@@ -194,10 +194,18 @@ and distinguish pre-existing failures from regressions.
   components guide for model inputs and installation limits.
 - Target verification waits for OPEN/CLOSE/TARGET_ADJUSTMENT and pending roll
   work, not standing STOP_LOSS/TAKE_PROFIT orders. Superseded checks are abandoned.
-- Explicit reset gives cancellations a bounded grace period, then liquidates
-  even if some cancellations are unconfirmed: getting flat is the priority.
-  Incomplete liquidation preserves Book recovery state and prevents trading
-  from being enabled.
+- A reset closes all open positions and cancels pending orders. Use `reset`
+  consistently for this action (`Controller.execute_reset` and
+  `haymaker.controller.reset.Reset`). Give cancellations a bounded grace period,
+  then liquidate even if some cancellations are unconfirmed: getting flat is
+  the priority.
+  Clear Book only after every required liquidation was accepted and fully
+  filled, pre-reset orders are terminal, and a fresh requested broker snapshot
+  confirms flatness. Otherwise preserve recovery state and the reset flag,
+  and prevent trading from being enabled.
+  `--nuke` requests an emergency reset through a separate path: it bypasses
+  normal submission policies, disables trading, and neither verifies completion
+  nor clears Book state.
 
 ## Storage and configuration
 

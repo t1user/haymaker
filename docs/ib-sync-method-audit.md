@@ -8,14 +8,14 @@ replacement.  It excludes the experimental dashboard.
 - `haymaker/handlers.py`: `IB.accountSummary()` now awaits
   `IB.accountSummaryAsync()` in the connected event handler.
 - `haymaker/controller/controller.py`: `IB.qualifyContracts()` now awaits
-  `IB.qualifyContractsAsync()` in the nuke close path.
+  `IB.qualifyContractsAsync()` in the emergency reset (`--nuke`) path.
 
 ## Not replaced
 
 - `haymaker/trader.py`, `haymaker/controller/controller.py`, and
-  `haymaker/controller/terminator.py`: `IB.placeOrder()` has no async
+  `haymaker/controller/reset.py`: `IB.placeOrder()` has no async
   replacement; it returns a live `Trade` object that is updated by events.
-- `haymaker/trader.py` and `haymaker/controller/terminator.py`:
+- `haymaker/trader.py` and `haymaker/controller/reset.py`:
   `IB.cancelOrder()` and `IB.reqGlobalCancel()` have no async replacements.
 - `haymaker/streamers.py` and `haymaker/controller/future_roller.py`:
   `IB.reqMktData()`, `IB.reqRealTimeBars()`, and `IB.reqTickByTickData()` are
@@ -23,7 +23,7 @@ replacement.  It excludes the experimental dashboard.
 - `haymaker/handlers.py`: `IB.reqPnL()` starts a PnL subscription and has no
   async replacement.
 - `haymaker/trader.py`, `haymaker/controller/sync_routines.py`,
-  `haymaker/controller/sync_brackets.py`, `haymaker/controller/terminator.py`,
+  `haymaker/controller/sync_brackets.py`, `haymaker/controller/reset.py`,
   `haymaker/controller/controller.py`, `haymaker/controller/sync_coordinator.py`,
   `haymaker/handlers.py`, and `haymaker/manager.py`: `IB.openTrades()`,
   `IB.trades()`, `IB.fills()`, and `IB.positions()` read local wrapper state and

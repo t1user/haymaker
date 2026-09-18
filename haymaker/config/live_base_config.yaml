@@ -24,9 +24,10 @@ logging: # Framework logging setup and broker audit logging.
 
 controller: # Trading reconciliation, startup actions, and scheduling.
   startup: # One-run actions applied by Controller.run().
-    reset: false # Close positions and clear typed Book state after startup sync.
+    # Reset: close all open positions and cancel pending orders.
+    reset: false # Clear Book only after reset completion is confirmed.
     zero: false # Clear local Book projections after startup sync.
-    nuke: false # Cancel orders, close positions, and disable trading.
+    nuke: false # Emergency reset without completion verification; disable trading.
   ignore_errors: [2107, 2108, 2109, 202, 321] # Suppress routine broker codes in controller logs.
   log_order_events: false # Enable detailed order-event logging.
   future_roll_time: [14, 0] # UTC hour and minute for the daily futures roll.

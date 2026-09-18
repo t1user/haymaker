@@ -81,10 +81,23 @@ def live_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("module_path", type=Path, help="Python strategy module.")
     _add_common_options(parser)
-    parser.add_argument("--reset", action="store_true", default=None)
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        default=None,
+        help="Reset the account: close all open positions and cancel pending orders.",
+    )
     parser.add_argument("--zero", action="store_true", default=None)
     parser.add_argument("--cold-start", action="store_true", default=None)
-    parser.add_argument("--nuke", action="store_true", default=None)
+    parser.add_argument(
+        "--nuke",
+        action="store_true",
+        default=None,
+        help=(
+            "Request an emergency reset without completion verification; "
+            "disable trading."
+        ),
+    )
     return parser
 
 

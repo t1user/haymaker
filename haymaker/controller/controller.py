@@ -23,9 +23,9 @@ from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
+from .reset import Reset
 from .sync_brackets import MissingBracketsPolicy
 from .sync_coordinator import SyncBrokenStateError, SyncCoordinator
-from .terminator import Terminator
 
 log = logging.getLogger(__name__)
 
@@ -274,7 +274,7 @@ class Controller(Atom):
             self.clear_records()
             self.zero = False
         if self.reset:
-            if not await self.execute_stops_and_close_positions():
+            if not await self.execute_reset():
                 self.disable_trading("account reset did not complete")
                 return SyncOutcome.FAILED
             self.book.clear_state()
@@ -872,10 +872,14 @@ class Controller(Atom):
         else:
             log.debug("Broker message %s: %s %s", errorCode, errorString, context)
 
-    async def execute_stops_and_close_positions(self) -> bool:
-        """Run an explicit account reset and report whether it completed."""
+    async def execute_reset(self) -> bool:
+        """Execute a reset and return whether broker completion is confirmed.
 
-        return await Terminator(self).run()
+        A reset closes all open positions and cancels pending orders.
+        :meth:`run` clears Book state only after this method succeeds.
+        """
+
+        return await Reset(self).run()
 
     def clear_records(self) -> None:
         self.book.clear_state()
@@ -903,10 +907,12 @@ class Controller(Atom):
             )
 
     async def run_nuke(self) -> None:
+        """Request an emergency reset without verifying completion or clearing Book."""
+
         self.ib.reqGlobalCancel()
         await self.close_positions()
-        self.disable_trading("self nuke requested")
-        log.critical("Emergency account liquidation requested.")
+        self.disable_trading("emergency reset requested (--nuke)")
+        log.critical("Emergency reset requested (--nuke).")
 
 
 class OrderLoggers:

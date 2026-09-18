@@ -896,6 +896,21 @@ cannot duplicate an order's fills or discard new evidence because its live Trade
 has a shorter status log. Both roll modes account explicit combo-leg evidence in
 place of the BAG fallback, never in addition to it.
 
+.. _account-reset:
+
+A **reset** closes all open positions and cancels pending orders. Request it
+with ``--reset`` or ``controller.startup.reset``. Controller executes the reset
+through ``Controller.execute_reset()`` and clears Book state only after every
+required liquidation was accepted and fully filled, all pre-reset orders became
+terminal, and a fresh broker-position request confirmed zero remaining positions.
+Cancellation has a bounded grace period; liquidation is attempted even when
+cancellation remains unconfirmed. A cancelled, rejected, suppressed, incomplete
+or timed-out liquidation, an unresolved pre-reset order, or unavailable final
+broker confirmation leaves recovery state and the reset flag intact and disables
+trading. Cached positions may guide a best-effort residual liquidation when a
+request fails, but cannot establish successful reset. Reset makes one bounded
+liquidation attempt; it does not repeatedly resubmit failed quantities.
+
 :class:`~haymaker.controller.Controller` owns broker submission/cancellation,
 immediate OrderInfo registration, status and rejection handling, Fill and
 commission processing, Trade rebinding, blotter attribution, aggregate broker

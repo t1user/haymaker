@@ -1,5 +1,7 @@
 """Independent signal-to-broker tests; keep the older integration suite too."""
 
+import asyncio
+
 import ib_insync as ibi
 import pytest
 from copy import deepcopy
@@ -26,6 +28,7 @@ from haymaker.components import (
     TakeProfitAsStopMultiple,
 )
 from haymaker.controller import Controller
+from haymaker.controller.controller import SyncOutcome
 
 
 @pytest.fixture
@@ -71,6 +74,50 @@ async def test_entry_partial_fill_protection_and_commission_without_blotter(epis
     info = runtime.book.orders.by_id(entry.order.orderId)
     assert info.fills[0].commission_report.commission == 1.25
     assert runtime.book.blotter is None
+
+
+@pytest.mark.parametrize("liquidation", ["cancelled", "suppressed"])
+async def test_failed_reset_preserves_non_flat_broker_and_durable_book(
+    episode, order_saver, state_saver, monkeypatch, liquidation
+):
+    """A failed close cannot erase holdings from independent broker or Book state."""
+    runtime, broker, signal, model, pipe = episode
+    signal.onData(observation(1))
+    entry = broker.submitted[0]
+    await broker.fill(entry)
+    before = runtime.book.positions.for_source("alpha")
+    controller = runtime.controller
+    controller.reset = True
+    monkeypatch.setattr(broker, "isConnected", lambda: True)
+    if liquidation == "cancelled":
+        place_order = broker.placeOrder
+
+        def cancel_liquidation(contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
+            """Accept the market close, then deliver a broker cancellation."""
+            trade = place_order(contract, order)
+            asyncio.get_running_loop().call_soon(broker.cancelOrder, order)
+            return trade
+
+        monkeypatch.setattr(broker, "placeOrder", cancel_liquidation)
+    else:
+        monkeypatch.setattr(controller, "verify_market_open", lambda contract: False)
+
+    assert await controller.run() is SyncOutcome.FAILED
+
+    assert controller.reset is True
+    assert controller._trading_disabled is True
+    assert broker.quantities[entry.contract] == 2
+    assert runtime.book.positions.for_source("alpha") == before
+    assert len(broker.submitted) == (4 if liquidation == "cancelled" else 3)
+    recovered = Book(
+        order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
+    )
+    assert recovered.positions.for_source("alpha") == before
+    assert (
+        recovered.positions.quantity(entry.contract)
+        == broker.quantities[entry.contract]
+    )
+    assert recovered.orders.by_id(entry.order.orderId).fills
 
 
 @pytest.mark.parametrize("exit_index", [1, 2])

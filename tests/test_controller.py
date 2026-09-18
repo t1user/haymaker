@@ -21,6 +21,7 @@ from haymaker.components import (
 )
 from haymaker.controller import Controller
 from haymaker.controller.controller import ControllerError, SyncOutcome
+from haymaker.controller.reset import Reset
 from haymaker.controller.sync_brackets import (
     BracketSync,
     BracketSyncAction,
@@ -32,7 +33,6 @@ from haymaker.controller.sync_coordinator import (
     SyncCoordinator,
     verify_broker_position_source,
 )
-from haymaker.controller.terminator import Terminator
 from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
@@ -858,7 +858,7 @@ def test_remove_bracket_policy_defers_obsolete_bracket_during_active_close(
 
 
 @pytest.mark.asyncio
-async def test_terminator_waits_for_cancellation_before_logical_close(
+async def test_reset_waits_for_cancellation_before_logical_close(
     controller_runtime,
 ):
     """Reset never overlaps an attributed close with a working exit order."""
@@ -889,6 +889,7 @@ async def test_terminator_waits_for_cancellation_before_logical_close(
     )
     controller.ib.openTrades = Mock(return_value=[protective])
     controller.ib.positions = Mock(return_value=[])
+    controller.ib.reqPositionsAsync = AsyncMock(return_value=[])
     loop = asyncio.get_running_loop()
 
     def cancel(_trade):
@@ -927,15 +928,16 @@ async def test_terminator_waits_for_cancellation_before_logical_close(
     controller.cancel = Mock(side_effect=cancel)
     controller.trade = Mock(side_effect=close)
 
-    completed = await Terminator(controller).run()
+    completed = await Reset(controller).run()
 
     assert completed is True
     controller.trade.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_terminator_liquidates_when_cancellation_does_not_complete(
-    controller_runtime,
+@pytest.mark.parametrize("cancel_during_liquidation", [False, True])
+async def test_reset_liquidates_when_cancellation_does_not_complete(
+    controller_runtime, monkeypatch, cancel_during_liquidation, caplog
 ):
     """Cancellation grace expiry never prevents an urgent flattening attempt."""
 
@@ -965,6 +967,7 @@ async def test_terminator_liquidates_when_cancellation_does_not_complete(
     )
     controller.ib.openTrades = Mock(return_value=[protective])
     controller.ib.positions = Mock(return_value=[])
+    controller.ib.reqPositionsAsync = AsyncMock(return_value=[])
     liquidation = ibi.Trade(
         contract=contract(),
         order=ibi.MarketOrder("SELL", 1),
@@ -975,19 +978,33 @@ async def test_terminator_liquidates_when_cancellation_does_not_complete(
             remaining=0,
         ),
     )
-    controller.trade = Mock(return_value=liquidation)
-    terminator = Terminator(controller)
-    terminator.cancellation_timeout = 0
 
-    completed = await terminator.run()
+    def close(*args, **kwargs):
+        """Cancellation can finish after its grace period, while closing."""
+        assert not protective.isDone()
+        if cancel_during_liquidation:
+            protective.orderStatus.status = ibi.OrderStatus.Cancelled
+        return liquidation
 
-    assert completed is True
+    controller.trade = Mock(side_effect=close)
+    controller.reset = True
+    controller.sync = AsyncMock(return_value=SyncOutcome.OK)
+    runtime.book.clear_state = Mock(wraps=runtime.book.clear_state)
+    monkeypatch.setattr(Reset, "cancellation_timeout", 0)
+
+    if cancel_during_liquidation:
+        assert await controller.run() is SyncOutcome.OK
+        runtime.book.clear_state.assert_called_once()
+        assert controller.reset is False
+    else:
+        await assert_reset_fails(controller)
+        assert "orderId=77 status=Submitted filled=0.0 remaining=1" in caplog.text
     controller.trade.assert_called_once()
     assert controller.trade.call_args.kwargs["role"] == (StandardOrderRole.LIQUIDATION)
 
 
 @pytest.mark.asyncio
-async def test_terminator_does_not_hide_residual_behind_flat_state(
+async def test_reset_does_not_hide_residual_behind_flat_state(
     controller_runtime,
 ):
     """A stale flat PositionState does not suppress broker liquidation."""
@@ -1012,6 +1029,9 @@ async def test_terminator_does_not_hide_residual_behind_flat_state(
             )
         ]
     )
+    controller.ib.reqPositionsAsync = AsyncMock(
+        side_effect=[controller.ib.positions(), []]
+    )
     done_trade = ibi.Trade(
         contract=contract(),
         order=ibi.Order(
@@ -1029,7 +1049,7 @@ async def test_terminator_does_not_hide_residual_behind_flat_state(
     )
     controller.trade = Mock(return_value=done_trade)
 
-    completed = await Terminator(controller).run()
+    completed = await Reset(controller).run()
 
     assert completed is True
     assert controller.trade.call_args.kwargs["role"] == (StandardOrderRole.LIQUIDATION)
@@ -1042,7 +1062,7 @@ async def test_run_keeps_book_when_explicit_reset_fails(controller_runtime):
     runtime, controller, _ = controller_runtime
     controller.reset = True
     controller.sync = AsyncMock(return_value=SyncOutcome.OK)
-    controller.execute_stops_and_close_positions = AsyncMock(return_value=False)
+    controller.execute_reset = AsyncMock(return_value=False)
     runtime.book.clear_state = Mock()
 
     completed = await controller.run()
@@ -1051,6 +1071,280 @@ async def test_run_keeps_book_when_explicit_reset_fails(controller_runtime):
     assert controller._trading_disabled is True
     assert controller.reset is True
     runtime.book.clear_state.assert_not_called()
+
+
+@pytest.fixture
+def reset_runtime(controller_runtime):
+    """Seed recovery state and isolate startup sync from the real reset path."""
+    runtime, controller, trader = controller_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=2,
+            position_id="episode",
+            target_contract=contract(),
+            target_quantity=2,
+            bracket_inputs={"atr": 5},
+            blocked_direction=-1,
+        )
+    )
+    controller.reset = True
+    controller.sync = AsyncMock(return_value=SyncOutcome.OK)
+    runtime.book.clear_state = Mock(wraps=runtime.book.clear_state)
+    controller.ib.openTrades = Mock(return_value=[])
+    controller.ib.positions = Mock(return_value=[])
+    controller.ib.reqPositionsAsync = AsyncMock(return_value=[])
+    controller.trade = Mock(
+        return_value=ibi.Trade(
+            contract=contract(),
+            order=ibi.MarketOrder("SELL", 2, orderId=78),
+            orderStatus=ibi.OrderStatus(
+                orderId=78, status=ibi.OrderStatus.Filled, filled=2, remaining=0
+            ),
+        )
+    )
+    return runtime, controller, trader
+
+
+async def assert_reset_fails(controller: Controller) -> None:
+    """Verify a failed reset preserves recovery state and the one-run flag."""
+    before = dict(controller.book.positions.source_states())
+
+    assert await controller.run() is SyncOutcome.FAILED
+
+    assert controller._trading_disabled is True
+    assert controller.reset is True
+    cast(Mock, controller.book.clear_state).assert_not_called()
+    assert controller.book.positions.source_states() == before
+
+
+@pytest.mark.parametrize("residual", [False, True])
+@pytest.mark.parametrize(
+    "status, filled, remaining",
+    [
+        (ibi.OrderStatus.Cancelled, 0, 2),
+        (ibi.OrderStatus.ApiCancelled, 0, 2),
+        (ibi.OrderStatus.Inactive, 0, 2),
+        (ibi.OrderStatus.Cancelled, 1, 1),
+        (ibi.OrderStatus.Submitted, 1, 1),
+        (ibi.OrderStatus.Submitted, 0, 2),
+        (ibi.OrderStatus.Filled, 1, 1),
+        (ibi.OrderStatus.Filled, 1, 0),
+        (ibi.OrderStatus.Filled, 2, 1),
+    ],
+)
+async def test_reset_requires_full_liquidation_fill(
+    reset_runtime, monkeypatch, caplog, residual, status, filled, remaining
+):
+    """Terminal status, partial fills and timeouts never authorize state clearing."""
+    runtime, controller, _ = reset_runtime
+    liquidation = controller.trade.return_value
+    liquidation.orderStatus.status = status
+    liquidation.orderStatus.filled = filled
+    liquidation.orderStatus.remaining = remaining
+    if residual:
+        state = runtime.book.positions.for_source("alpha")
+        runtime.book.update_position(replace(state, quantity=0))
+        controller.ib.reqPositionsAsync.side_effect = [
+            [ibi.Position("test", contract(), 2, 100)],
+            [],
+        ]
+    monkeypatch.setattr("haymaker.controller.reset.asyncio.sleep", AsyncMock())
+
+    await assert_reset_fails(controller)
+
+    controller.trade.assert_called_once()
+    assert "orderId=78" in caplog.text
+    assert f"status={status} filled={filled} remaining={remaining}" in caplog.text
+
+
+@pytest.mark.parametrize("residual", [False, True])
+async def test_reset_fails_on_suppressed_liquidation(reset_runtime, residual, caplog):
+    """An empty list of submitted trades cannot mask a required suppression."""
+    runtime, controller, _ = reset_runtime
+    controller.trade.return_value = None
+    if residual:
+        state = runtime.book.positions.for_source("alpha")
+        runtime.book.update_position(replace(state, quantity=0))
+        controller.ib.reqPositionsAsync.side_effect = [
+            [ibi.Position("test", contract(), 2, 100)],
+            [],
+        ]
+
+    await assert_reset_fails(controller)
+
+    controller.trade.assert_called_once()
+    assert "liquidation suppressed: contract=" in caplog.text
+    assert "ESM6" in caplog.text
+    if not residual:
+        assert "source=alpha" in caplog.text
+
+
+@pytest.mark.parametrize("logical_filled", [False, True])
+async def test_reset_discovers_residuals_from_requested_positions(
+    reset_runtime, logical_filled
+):
+    """Fresh broker-only holdings are closed even when the cache is empty."""
+    runtime, controller, _ = reset_runtime
+    residual_contract = ibi.Future(conId=2, symbol="NQ", localSymbol="NQM6")
+    controller.ib.reqPositionsAsync.side_effect = [
+        [ibi.Position("test", residual_contract, -3, 100)],
+        [],
+    ]
+    logical_trade = controller.trade.return_value
+    if not logical_filled:
+        logical_trade.orderStatus.status = ibi.OrderStatus.Cancelled
+        logical_trade.orderStatus.filled = 0
+        logical_trade.orderStatus.remaining = 2
+    residual_trade = ibi.Trade(
+        contract=residual_contract,
+        order=ibi.MarketOrder("BUY", 3, orderId=79),
+        orderStatus=ibi.OrderStatus(
+            orderId=79, status=ibi.OrderStatus.Filled, filled=3, remaining=0
+        ),
+    )
+    controller.trade.side_effect = [logical_trade, residual_trade]
+
+    if logical_filled:
+        assert await controller.run() is SyncOutcome.OK
+        runtime.book.clear_state.assert_called_once()
+        assert runtime.book.positions.source_states() == {}
+        assert controller.reset is False
+        assert controller._trading_disabled is False
+    else:
+        await assert_reset_fails(controller)
+
+    assert controller.trade.call_count == 2
+    args, kwargs = controller.trade.call_args
+    assert args[0] == residual_contract
+    assert args[1].action == "BUY"
+    assert args[1].totalQuantity == 3
+    assert kwargs["role"] == StandardOrderRole.LIQUIDATION
+    controller.ib.reqPositionsAsync.assert_awaited()
+    assert controller.ib.reqPositionsAsync.await_count == 2
+
+
+async def test_reset_ignores_stale_cached_residuals_when_request_succeeds(
+    reset_runtime,
+):
+    """Successful empty discovery prevents a stale cache from opening new exposure."""
+    runtime, controller, _ = reset_runtime
+    controller.ib.positions.return_value = [
+        ibi.Position("test", ibi.Future(conId=2, symbol="NQ"), 3, 100)
+    ]
+
+    assert await controller.run() is SyncOutcome.OK
+
+    controller.trade.assert_called_once()
+    runtime.book.clear_state.assert_called_once()
+    assert controller.reset is False
+
+
+@pytest.mark.parametrize("final_flat", [False, True])
+async def test_reset_uses_fresh_snapshot_without_double_liquidation(
+    reset_runtime, final_flat, caplog
+):
+    """An accepted logical close owns its contract even if a snapshot is non-flat."""
+    runtime, controller, _ = reset_runtime
+    positions = [ibi.Position("test", contract(), 2, 100)]
+    controller.ib.reqPositionsAsync.side_effect = [
+        positions,
+        [ibi.Position("test", contract(), 0, 100)] if final_flat else positions,
+    ]
+    # Exercise both disagreement directions: stale non-flat and stale empty caches.
+    controller.ib.positions.return_value = positions if final_flat else []
+
+    if final_flat:
+        assert await controller.run() is SyncOutcome.OK
+        runtime.book.clear_state.assert_called_once()
+        assert controller.reset is False
+    else:
+        await assert_reset_fails(controller)
+        assert "broker positions remain non-flat" in caplog.text
+        assert "position=2" in caplog.text
+    controller.trade.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "exception"])
+async def test_reset_fails_when_final_position_request_is_unavailable(
+    reset_runtime, failure, caplog
+):
+    """Even full fills and an empty cache need successful final broker authority."""
+    _, controller, _ = reset_runtime
+    controller.broker_request_timeout = 0.01
+    calls = 0
+
+    async def positions():
+        """Allow discovery, then fail or stall the verification request."""
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return []
+        if failure == "exception":
+            raise ConnectionError("positions unavailable")
+        await asyncio.Future()
+
+    controller.ib.reqPositionsAsync = positions
+
+    await assert_reset_fails(controller)
+
+    assert calls == 2
+    assert "Reset position request" in caplog.text
+    assert "final flat verification" in caplog.text
+
+
+@pytest.mark.parametrize("final_available", [False, True])
+async def test_reset_uses_cache_only_for_best_effort_residual_close(
+    reset_runtime, final_available
+):
+    """Cached residuals can be attempted, but only a later request proves flatness."""
+    runtime, controller, _ = reset_runtime
+    state = runtime.book.positions.for_source("alpha")
+    runtime.book.update_position(replace(state, quantity=0))
+    controller.ib.positions.return_value = [ibi.Position("test", contract(), 2, 100)]
+    controller.ib.reqPositionsAsync.side_effect = [
+        ConnectionError("discovery unavailable"),
+        [] if final_available else ConnectionError("verification unavailable"),
+    ]
+
+    if final_available:
+        assert await controller.run() is SyncOutcome.OK
+        runtime.book.clear_state.assert_called_once()
+        assert controller.reset is False
+    else:
+        await assert_reset_fails(controller)
+    controller.trade.assert_called_once()
+
+
+async def test_reset_keeps_suppression_failure_after_residual_fills(reset_runtime):
+    """A best-effort residual fill does not erase a failed logical submission."""
+    _, controller, _ = reset_runtime
+    controller.trade.side_effect = [None, controller.trade.return_value]
+    controller.ib.reqPositionsAsync.side_effect = [
+        [ibi.Position("test", contract(), 2, 100)],
+        [],
+    ]
+
+    await assert_reset_fails(controller)
+
+    assert controller.trade.call_count == 2
+
+
+@pytest.mark.parametrize("exception", [ConnectionError, QueueProcessingError])
+async def test_reset_does_not_swallow_submission_failure(reset_runtime, exception):
+    """Broker and persistence submission exceptions remain fail-stop exceptions."""
+    runtime, controller, _ = reset_runtime
+    before = dict(runtime.book.positions.source_states())
+    controller.trade.side_effect = exception("submission unavailable")
+
+    with pytest.raises(exception, match="submission unavailable"):
+        await controller.run()
+
+    runtime.book.clear_state.assert_not_called()
+    assert runtime.book.positions.source_states() == before
+    assert controller.reset is True
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1445,7 @@ async def test_superseded_target_is_not_verified_or_compared_with_broker(
 
 
 @pytest.mark.asyncio
-async def test_nuke_liquidation_is_registered_with_episode_attribution(
+async def test_emergency_reset_liquidation_is_registered_with_episode_attribution(
     controller_runtime, monkeypatch
 ):
     runtime, controller, trader = controller_runtime
