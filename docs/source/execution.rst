@@ -911,6 +911,12 @@ trading. Cached positions may guide a best-effort residual liquidation when a
 request fails, but cannot establish successful reset. Reset makes one bounded
 liquidation attempt; it does not repeatedly resubmit failed quantities.
 
+``Controller.execute_emergency_reset()`` (also requested by ``--nuke``) disables
+trading before cancelling orders and submitting closes for cached broker
+positions. It bypasses normal submission policies, but order registration and
+persistence checks still apply. It does not verify completion or clear Book
+state. Broker and persistence failures propagate with trading left disabled.
+
 :class:`~haymaker.controller.Controller` owns broker submission/cancellation,
 immediate OrderInfo registration, status and rejection handling, Fill and
 commission processing, Trade rebinding, blotter attribution, aggregate broker

@@ -112,7 +112,10 @@ The research package is intentionally separate from live execution. It works dir
   Sync retries broker-position freshness failures, back-reports known fills
   before comparison, and requests supervisor-owned recovery before correction
   where required.
-  `Controller.execute_reset()` delegates account reset to `Reset` in `reset.py`.
+  `Controller.execute_reset()` and `execute_emergency_reset()` delegate to
+  `Reset` and `EmergencyReset` in `reset.py`, which own action sequencing and
+  share liquidation-order construction. Controller owns registered broker
+  submission and startup's verified-reset state clearing.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
 - `haymaker/book/`: typed order/fill evidence, one-to-one PositionState
   separating held Contract/bracket inputs from pending-target Contract/inputs,
@@ -595,8 +598,10 @@ dataloader contracts.csv -f settings.yaml
   was accepted and fully filled, pre-reset orders are terminal, and a fresh broker
   position request confirms flatness. Failure preserves recovery state and the
   reset flag, and prevents startup from enabling trading. The separate `--nuke`
-  emergency reset bypasses normal submission policies, disables trading, and
-  neither verifies completion nor clears Book state.
+  emergency reset disables trading before broker operations and bypasses normal
+  submission policies while retaining Controller's persistence checks and order
+  registration. It neither verifies completion nor clears Book state; failures
+  propagate with trading disabled.
 - Final live-runtime close warns about active TARGET_ADJUSTMENT orders. Treat
   the recorded model name as a recovery-compatibility promise and defer routing
   or implementation changes until those direct orders are terminal.

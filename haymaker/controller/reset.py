@@ -16,6 +16,18 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _liquidation_order(
+    quantity: float, *, tif: str = "", outside_rth: bool = False
+) -> ibi.MarketOrder:
+    """Build the market order that offsets one signed position quantity."""
+    return ibi.MarketOrder(
+        "BUY" if quantity < 0 else "SELL",
+        abs(quantity),
+        tif=tif,
+        outsideRth=outside_rth,
+    )
+
+
 class Reset:
     """Reset the account: close all open positions and cancel pending orders.
 
@@ -35,7 +47,7 @@ class Reset:
     async def run(self) -> bool:
         """Execute the reset and report whether it completed."""
 
-        log.warning("Explicit account reset initiated.")
+        log.warning("Account reset initiated.")
         open_trades = tuple(self.controller.ib.openTrades())
         for trade in open_trades:
             self.controller.cancel(trade)
@@ -47,10 +59,7 @@ class Reset:
             if state.quantity and state.contract is not None:
                 logical_trade = self.controller.trade(
                     state.contract,
-                    ibi.MarketOrder(
-                        "BUY" if state.quantity < 0 else "SELL",
-                        abs(state.quantity),
-                    ),
+                    _liquidation_order(state.quantity),
                     role=StandardOrderRole.LIQUIDATION,
                     execution_model_name=state.execution_model_name,
                     source_key=source_key,
@@ -78,11 +87,10 @@ class Reset:
             if position.position and position.contract.conId not in logical_contracts:
                 residual_trade = self.controller.trade(
                     position.contract,
-                    ibi.MarketOrder(
-                        "BUY" if position.position < 0 else "SELL",
-                        abs(position.position),
+                    _liquidation_order(
+                        position.position,
                         tif="DAY",
-                        outsideRth=True,
+                        outside_rth=True,
                     ),
                     role=StandardOrderRole.LIQUIDATION,
                     execution_model_name=(
@@ -194,3 +202,45 @@ class Reset:
                 trade.order.totalQuantity,
             )
         return not incomplete
+
+
+class EmergencyReset:
+    """Cancel pending orders and request position closes with trading disabled.
+
+    Trading is disabled before any broker call. Emergency liquidation bypasses
+    normal submission policies, while Controller still owns order registration
+    and persistence checks. Completion is not verified and Book is not cleared.
+    """
+
+    def __init__(self, controller: Controller) -> None:
+        self.controller = controller
+
+    def run(self) -> None:
+        """Disable trading and request the emergency reset, propagating failures."""
+        self.controller.disable_trading("emergency reset requested (--nuke)")
+        self.controller.ib.reqGlobalCancel()
+        self._close_positions()
+        log.critical("Emergency reset requested (--nuke).")
+
+    def _close_positions(self) -> None:
+        """Close cached broker positions through Controller's registered submission."""
+        for position in self.controller.ib.positions():
+            states = self.controller.book.positions.source_states_for_contract(
+                position.contract
+            )
+            state = states[0] if len(states) == 1 else None
+            self.controller._submit_registered_trade(
+                position.contract,
+                _liquidation_order(position.position),
+                role=StandardOrderRole.LIQUIDATION,
+                execution_model_name=(
+                    state.execution_model_name
+                    if state is not None
+                    else self.controller.book.orders.owner_for_contract(
+                        position.contract
+                    )
+                    or "nuke_liquidation"
+                ),
+                source_key=state.source_key if state is not None else None,
+                position_id=state.position_id if state is not None else None,
+            )

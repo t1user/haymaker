@@ -1444,10 +1444,65 @@ async def test_superseded_target_is_not_verified_or_compared_with_broker(
     assert "Target not achieved" not in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_emergency_reset_liquidation_is_registered_with_episode_attribution(
-    controller_runtime, monkeypatch
+@pytest.mark.parametrize("quantity", [-2, 2])
+@pytest.mark.parametrize(
+    "policy", ["normal", "disabled", "closed_market", "rejections"]
+)
+def test_emergency_reset_liquidation_is_registered_with_episode_attribution(
+    controller_runtime, monkeypatch, quantity, policy
 ):
+    """Emergency reset bypasses submission policy but retains Book attribution."""
+    runtime, controller, trader = controller_runtime
+    runtime.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=contract(),
+            quantity=quantity,
+            position_id="episode",
+        )
+    )
+    position = ibi.Position("account", contract(), quantity, 100)
+    monkeypatch.setattr(runtime.ib, "positions", lambda: [position])
+    if policy == "disabled":
+        controller.disable_trading("already disabled")
+    elif policy == "closed_market":
+        monkeypatch.setattr(controller, "verify_market_open", lambda contract: False)
+    elif policy == "rejections":
+        for _ in range(runtime.book.max_rejected_orders):
+            runtime.book.orders.register_rejection("brackets")
+
+    def cancel_orders():
+        """Confirm trading is disabled before the first broker request."""
+        assert controller._trading_disabled is True
+
+    cancel = Mock(side_effect=cancel_orders)
+    monkeypatch.setattr(runtime.ib, "reqGlobalCancel", cancel)
+    clear_state = Mock(wraps=runtime.book.clear_state)
+    monkeypatch.setattr(runtime.book, "clear_state", clear_state)
+
+    controller.execute_emergency_reset()
+
+    cancel.assert_called_once_with()
+    clear_state.assert_not_called()
+    assert controller._trading_disabled is True
+    assert len(trader.trades) == 1
+    trade = trader.trades[0]
+    info = runtime.book.orders.by_id(trade.order.orderId)
+    assert trade.order.action == ("BUY" if quantity < 0 else "SELL")
+    assert trade.order.totalQuantity == abs(quantity)
+    assert info.role == StandardOrderRole.LIQUIDATION
+    assert info.execution_model_name == "brackets"
+    assert info.source_key == "alpha"
+    assert info.position_id == "episode"
+
+
+@pytest.mark.parametrize("entrypoint", ["direct", "startup"])
+@pytest.mark.parametrize("failure", ["cancel", "submission", "persistence"])
+async def test_emergency_reset_failure_leaves_trading_disabled(
+    controller_runtime, monkeypatch, entrypoint, failure
+):
+    """Every entry point disables trading even when broker or persistence work fails."""
     runtime, controller, trader = controller_runtime
     runtime.book.update_position(
         PositionState(
@@ -1458,23 +1513,38 @@ async def test_emergency_reset_liquidation_is_registered_with_episode_attributio
             position_id="episode",
         )
     )
-    position = ibi.Position("account", contract(), 2, 100)
-    monkeypatch.setattr(runtime.ib, "positions", lambda: [position])
+    before = dict(runtime.book.positions.source_states())
     monkeypatch.setattr(
-        runtime.ib,
-        "qualifyContractsAsync",
-        AsyncMock(return_value=[position.contract]),
+        runtime.ib, "positions", lambda: [ibi.Position("test", contract(), 2, 100)]
     )
+    cancel = Mock()
+    monkeypatch.setattr(runtime.ib, "reqGlobalCancel", cancel)
+    clear_state = Mock(wraps=runtime.book.clear_state)
+    monkeypatch.setattr(runtime.book, "clear_state", clear_state)
+    if failure == "cancel":
+        cancel.side_effect = RuntimeError("reset request failed")
+    elif failure == "submission":
+        monkeypatch.setattr(
+            trader, "trade", Mock(side_effect=RuntimeError("reset request failed"))
+        )
+    else:
+        monkeypatch.setattr(
+            runtime.book,
+            "check_writable",
+            Mock(side_effect=QueueProcessingError("reset request failed")),
+        )
 
-    await controller.close_positions()
+    with pytest.raises(RuntimeError, match="reset request failed"):
+        if entrypoint == "startup":
+            controller.nuke = True
+            await controller.run()
+        else:
+            controller.execute_emergency_reset()
 
-    trade = trader.trades[0]
-    info = runtime.book.orders.by_id(trade.order.orderId)
-    assert trade.order.action == "SELL"
-    assert info.role == StandardOrderRole.LIQUIDATION
-    assert info.execution_model_name == "brackets"
-    assert info.source_key == "alpha"
-    assert info.position_id == "episode"
+    assert controller._trading_disabled is True
+    assert trader.trades == []
+    clear_state.assert_not_called()
+    assert runtime.book.positions.source_states() == before
 
 
 @pytest.mark.asyncio

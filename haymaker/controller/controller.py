@@ -23,7 +23,7 @@ from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
 from .future_roller import FutureRoller
-from .reset import Reset
+from .reset import EmergencyReset, Reset
 from .sync_brackets import MissingBracketsPolicy
 from .sync_coordinator import SyncBrokenStateError, SyncCoordinator
 
@@ -262,7 +262,7 @@ class Controller(Atom):
         self._ensure_runtime_timers_started()
         self.set_hold()
         if self.nuke:
-            await self.run_nuke()
+            self.execute_emergency_reset()
         outcome = await self.sync()
         if not outcome:
             if outcome is SyncOutcome.ABORTED:
@@ -881,38 +881,17 @@ class Controller(Atom):
 
         return await Reset(self).run()
 
+    def execute_emergency_reset(self) -> None:
+        """Request an emergency reset, disabling trading before broker operations.
+
+        This bypasses normal submission policies but retains persistence checks.
+        Completion is not verified and Book state is not cleared. Broker and
+        persistence failures propagate with trading left disabled.
+        """
+        EmergencyReset(self).run()
+
     def clear_records(self) -> None:
         self.book.clear_state()
-
-    async def close_positions(self) -> None:
-        for position in self.ib.positions():
-            await self.ib.qualifyContractsAsync(position.contract)
-            states = self.book.positions.source_states_for_contract(position.contract)
-            state = states[0] if len(states) == 1 else None
-            self._submit_registered_trade(
-                position.contract,
-                ibi.MarketOrder(
-                    "BUY" if position.position < 0 else "SELL",
-                    abs(position.position),
-                ),
-                role=StandardOrderRole.LIQUIDATION,
-                execution_model_name=(
-                    state.execution_model_name
-                    if state is not None
-                    else self.book.orders.owner_for_contract(position.contract)
-                    or "nuke_liquidation"
-                ),
-                source_key=state.source_key if state is not None else None,
-                position_id=state.position_id if state is not None else None,
-            )
-
-    async def run_nuke(self) -> None:
-        """Request an emergency reset without verifying completion or clearing Book."""
-
-        self.ib.reqGlobalCancel()
-        await self.close_positions()
-        self.disable_trading("emergency reset requested (--nuke)")
-        log.critical("Emergency reset requested (--nuke).")
 
 
 class OrderLoggers:

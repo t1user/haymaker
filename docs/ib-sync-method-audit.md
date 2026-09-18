@@ -7,8 +7,6 @@ replacement.  It excludes the experimental dashboard.
 
 - `haymaker/handlers.py`: `IB.accountSummary()` now awaits
   `IB.accountSummaryAsync()` in the connected event handler.
-- `haymaker/controller/controller.py`: `IB.qualifyContracts()` now awaits
-  `IB.qualifyContractsAsync()` in the emergency reset (`--nuke`) path.
 
 ## Not replaced
 
@@ -17,6 +15,8 @@ replacement.  It excludes the experimental dashboard.
   replacement; it returns a live `Trade` object that is updated by events.
 - `haymaker/trader.py` and `haymaker/controller/reset.py`:
   `IB.cancelOrder()` and `IB.reqGlobalCancel()` have no async replacements.
+  Emergency reset uses concrete Contracts from the broker position cache
+  without an additional qualification request.
 - `haymaker/streamers.py` and `haymaker/controller/future_roller.py`:
   `IB.reqMktData()`, `IB.reqRealTimeBars()`, and `IB.reqTickByTickData()` are
   streaming subscription APIs with no async replacements.

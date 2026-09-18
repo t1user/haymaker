@@ -195,17 +195,20 @@ and distinguish pre-existing failures from regressions.
 - Target verification waits for OPEN/CLOSE/TARGET_ADJUSTMENT and pending roll
   work, not standing STOP_LOSS/TAKE_PROFIT orders. Superseded checks are abandoned.
 - A reset closes all open positions and cancels pending orders. Use `reset`
-  consistently for this action (`Controller.execute_reset` and
-  `haymaker.controller.reset.Reset`). Give cancellations a bounded grace period,
+  consistently for this action. Keep sequencing in `haymaker.controller.reset`:
+  `Controller.execute_reset` and `execute_emergency_reset` delegate to `Reset`
+  and `EmergencyReset`. Give cancellations a bounded grace period,
   then liquidate even if some cancellations are unconfirmed: getting flat is
   the priority.
-  Clear Book only after every required liquidation was accepted and fully
-  filled, pre-reset orders are terminal, and a fresh requested broker snapshot
-  confirms flatness. Otherwise preserve recovery state and the reset flag,
+  Controller startup clears Book only after every required liquidation was
+  accepted and fully filled, pre-reset orders are terminal, and a fresh broker
+  snapshot confirms flatness. Otherwise preserve recovery state and the reset flag,
   and prevent trading from being enabled.
-  `--nuke` requests an emergency reset through a separate path: it bypasses
-  normal submission policies, disables trading, and neither verifies completion
-  nor clears Book state.
+  `--nuke` requests an emergency reset: `EmergencyReset` disables trading before
+  any broker operation, then bypasses normal submission policies through
+  Controller's registered submission path. Persistence checks still apply;
+  failures propagate with trading disabled. It neither verifies completion nor
+  clears Book state.
 
 ## Storage and configuration
 

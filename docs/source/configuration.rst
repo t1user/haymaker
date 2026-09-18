@@ -124,9 +124,10 @@ highest precedence.
 ``--reset`` requests a reset: close all open positions and cancel pending orders.
 Book state is cleared only after reset completion is confirmed. See
 :ref:`the reset documentation <account-reset>` for completion requirements and
-failure behavior. ``--nuke`` requests a separate emergency reset: it bypasses
-normal submission policies and disables trading, without verifying completion
-or clearing Book state.
+failure behavior. ``--nuke`` requests a separate emergency reset: it disables
+trading before any broker operation and bypasses normal submission policies,
+without verifying completion or clearing Book state. Persistence checks remain
+active; broker or persistence failures propagate with trading left disabled.
 
 .. argparse::
    :module: haymaker.config.cli_options
