@@ -149,6 +149,50 @@ async def test_live_duplicate_completion_uses_accounted_price(entry_path):
     assert not runtime.controller._trading_disabled
 
 
+@pytest.mark.parametrize("winner", ["close", "take_profit"])
+async def test_missing_stop_exit_cannot_reverse_exposure(
+    entry_path, restart_entry, winner
+):
+    """Either broker exit wins once; its OCA peer cannot reverse the account."""
+    runtime, broker, _, _ = entry_path
+    await broker.fill(broker.submitted[0])
+    broker.cancelOrder(broker.submitted[1].order)
+    fresh, replacement, controller, _ = restart_entry(runtime, broker)
+    assert await controller.run() is SyncOutcome.FAILED
+    take_profit, close = replacement.submitted[2:]
+    assert close.order.ocaGroup == take_profit.order.ocaGroup
+    winning, other = (close, take_profit) if winner == "close" else (take_profit, close)
+    await replacement.fill(winning)
+    assert other.orderStatus.status == ibi.OrderStatus.Cancelled
+    assert replacement.positions() == []
+    assert fresh.book.positions.for_source("alpha").quantity == 0
+
+
+@pytest.mark.parametrize("defect", ["quantity", "side", "contract"])
+async def test_inadequate_stop_is_removed_and_episode_closed(
+    entry_path, restart_entry, defect
+):
+    """Malformed stop evidence must drive the configured remove policy."""
+    runtime, broker, _, _ = entry_path
+    await broker.fill(broker.submitted[0])
+    stop = broker.submitted[1]
+    if defect == "quantity":
+        stop.order.totalQuantity = stop.orderStatus.remaining = 1
+    elif defect == "side":
+        stop.order.action = "BUY"
+    else:
+        stop.contract = ibi.Future("NQ", conId=102, exchange="CME")
+    fresh, replacement, controller, _ = restart_entry(runtime, broker)
+    assert await controller.run() is SyncOutcome.FAILED
+    assert replacement.submitted[1].isDone()
+    close = replacement.submitted[-1]
+    assert close.order.orderType == "MKT"
+    await replacement.fill(close)
+    assert replacement.positions() == []
+    assert replacement.openTrades() == []
+    assert fresh.book.positions.for_source("alpha").quantity == 0
+
+
 @pytest.mark.parametrize(
     "surviving_role", [StandardOrderRole.STOP_LOSS, StandardOrderRole.TAKE_PROFIT]
 )

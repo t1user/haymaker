@@ -85,13 +85,27 @@ class BracketSync:
                 and state.bracket_inputs
                 and not entry_active
                 and not exit_active
-                and not any(
-                    info.role == StandardOrderRole.STOP_LOSS for info in brackets
-                )
+                and self.controller.book.rolls.for_source(source_key) is None
+                and not self._episode_is_protected(state, brackets)
             ):
                 self.missing_brackets.append(
                     BracketIssue(state=state, existing_orders=brackets)
                 )
+
+    @staticmethod
+    def _episode_is_protected(
+        state: PositionState, brackets: tuple[OrderInfo, ...]
+    ) -> bool:
+        """Require a stop covering this episode's concrete exposure."""
+        return any(
+            info.role == StandardOrderRole.STOP_LOSS
+            and info.position_id == state.position_id
+            and info.trade.contract == state.contract
+            and info.trade.order.action == ("SELL" if state.quantity > 0 else "BUY")
+            and info.trade.order.orderType in {"STP", "STP LMT", "TRAIL", "FIX PEGGED"}
+            and info.trade.remaining() >= abs(state.quantity)
+            for info in brackets
+        )
 
     def check_stop_protection(self) -> None:
         """Find broker positions without enough opposite-side stop quantity."""

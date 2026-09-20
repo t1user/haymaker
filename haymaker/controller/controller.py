@@ -812,11 +812,44 @@ class Controller(Atom):
         if state is None or not state.quantity or state.contract is None:
             log.error("Attempt to close zero or unknown source %s", source_key)
             return
+        exits = tuple(
+            info.trade
+            for info in self.book.orders.active(source_key=source_key)
+            if info.role in {StandardOrderRole.STOP_LOSS, StandardOrderRole.TAKE_PROFIT}
+        )
+        action = "BUY" if state.quantity < 0 else "SELL"
+        for trade in exits:
+            if (
+                trade.contract != state.contract
+                or trade.order.action != action
+                or trade.remaining() != abs(state.quantity)
+                or not trade.order.ocaGroup
+                or trade.order.ocaType not in {1, 2, 3}
+            ):
+                self.cancel(trade)
+                if not trade.isDone():
+                    raise SyncBrokenStateError(
+                        f"Unsafe protective exit cancellation unconfirmed for {source_key!r}"
+                    )
+        groups = {
+            (trade.order.ocaGroup, trade.order.ocaType)
+            for trade in exits
+            if trade.isActive()
+        }
+        if len(groups) > 1:
+            raise SyncBrokenStateError(
+                f"Conflicting protective OCA groups for {source_key!r}"
+            )
+        options = {}
+        if groups:
+            group, oca_type = groups.pop()
+            options = {"ocaGroup": group, "ocaType": oca_type}
         self.trade(
             state.contract,
             ibi.MarketOrder(
-                "BUY" if state.quantity < 0 else "SELL",
+                action,
                 abs(state.quantity),
+                **options,
             ),
             role=role,
             execution_model_name=state.execution_model_name,
