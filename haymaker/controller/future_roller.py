@@ -157,7 +157,7 @@ class FutureRoller:
         ``now`` is an optional aware check time for deterministic policies/tests.
         In-flight work always resumes its persisted endpoints and stage.
         """
-        if self._checking:
+        if self._checking or not self.controller.broker_ready:
             return
         check_time = aware_datetime(now or datetime.now(timezone.utc), "now")
         self._checking = True
@@ -196,13 +196,12 @@ class FutureRoller:
             planned = by_contract[endpoints]
             old_holdings = [holding for holding, _ in planned]
             if not self._broker_quantity_matches(old_contract):
-                self._persist_blocked_discovery(
-                    series_key,
-                    old_contract,
-                    new_contract,
-                    old_holdings,
-                    "Book quantity does not match broker position",
+                log.info(
+                    "Roll deferred pending position reconciliation for %s",
+                    old_contract.localSymbol,
                 )
+                self.controller.suspend_broker_work()
+                self.controller.request_position_sync()
                 continue
             details = self.controller.contract_registry.get_details(new_contract)
             if details is not None and not details.is_open():

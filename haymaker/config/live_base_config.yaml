@@ -39,7 +39,7 @@ controller: # Trading reconciliation, startup actions, and scheduling.
   sync_max_attempts: 3 # Maximum reconciliation passes per sync cycle.
   sync_resync_delay: 1 # Seconds between reconciliation passes.
   position_mismatch_policy: fail # Unexplained Book/broker mismatch: fail, or opt into correct.
-  cancel_unknown_trades: false # Cancel broker trades missing from local state.
+  cancel_unknown_trades: false # Unknown active orders fail sync; true cancels and retries.
   missing_brackets: ignore # Action for missing protection: ignore, warn, or remove.
 
 book: # Typed persistent execution and accounting state.

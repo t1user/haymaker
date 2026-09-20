@@ -14,6 +14,7 @@ from episode_harness import (
 
 from haymaker.base import Pipe
 from haymaker.book import Book
+from haymaker.blotter import Blotter
 from haymaker.components import (
     BinarySignalProcessor,
     BracketExecutionModel,
@@ -35,7 +36,6 @@ def entry_path(atom_runtime_factory):
     runtime = atom_runtime_factory(ib=broker)
     controller = Controller(trader=runtime.trader)
     runtime.bind_controller(controller)
-    controller.release_hold()
     contract = ibi.Future("ES", conId=101, exchange="CME", localSymbol="ESU6")
     runtime.contract_registry.details.data[contract] = Mock(
         minTick=0.25, is_open=Mock(return_value=True)
@@ -147,6 +147,49 @@ async def test_live_duplicate_completion_uses_accounted_price(entry_path):
     assert len(broker.submitted) == 3
     assert broker.submitted[1].order.auxPrice == 91
     assert not runtime.controller._trading_disabled
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+async def test_commissions_survive_suspended_broker_work_and_restart(
+    entry_path, restart_entry, terminal
+):
+    """Every fill's late report persists while rolling/recovery is suspended."""
+    runtime, broker, _, _ = entry_path
+    trade = broker.submitted[0]
+    first = await broker.fill(trade, 1)
+    second = await broker.fill(trade, 2 if terminal else 1)
+    runtime.controller.suspend_broker_work()
+    await broker.commission(trade, first)
+    await broker.commission(trade, second)
+    fresh, _, controller, _ = restart_entry(runtime, broker)
+    assert await controller.run() is SyncOutcome.OK
+    records = fresh.book.orders.by_id(trade.order.orderId).fills
+    assert [record.commission_report.commission for record in records] == [1.25, 1.25]
+
+
+async def test_terminal_commissions_recovered_from_history_without_callbacks(
+    entry_path, restart_entry
+):
+    """A completed known order is still swept for late per-fill commissions."""
+    runtime, broker, _, _ = entry_path
+    trade = broker.submitted[0]
+    await broker.fill(trade, 1)
+    await broker.fill(trade, 2)
+    for fill in trade.fills:
+        fill.commissionReport.execId = fill.execution.execId
+        fill.commissionReport.commission = 1.25
+        fill.commissionReport.currency = "USD"
+    fresh, _, controller, _ = restart_entry(runtime, broker)
+    blotter = Blotter(save_immediately=False, saver=Mock())
+    fresh.book.blotter = blotter
+    assert await controller.run() is SyncOutcome.OK
+    assert [
+        record.commission_report.commission
+        for record in fresh.book.orders.by_id(1).fills
+    ] == [1.25, 1.25]
+    assert await controller.sync() is SyncOutcome.OK
+    assert len(blotter.blotter) == 1
+    assert blotter.blotter[0]["commission"] == 2.5
 
 
 @pytest.mark.parametrize("winner", ["close", "take_profit"])

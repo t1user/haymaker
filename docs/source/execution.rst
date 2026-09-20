@@ -925,6 +925,30 @@ waits only for OPEN, CLOSE, and TARGET_ADJUSTMENT work; protective stops and
 take-profits remain active without delaying the check. A superseded target is
 not checked or compared with the broker.
 
+Status, execution and commission callbacks remain active during startup,
+reconnect and workload shutdown. Book deduplicates execution accounting;
+Controller has no callback ``hold`` mode. Reconciliation also recovers late
+commission reports for known working and terminal orders. Blotter output waits
+for every execution's report before recording the completed trade.
+
+Scheduled and custom futures-roll checks defer while disconnected, during
+reconciliation, or before successful reconciliation of the current workload.
+A cached quantity mismatch defers discovery and requests reconciliation; it
+does not create a permanently blocked roll from the cache alone.
+
+With ``missing_brackets=remove``, required protection is checked against the
+episode's contract, side, identity and remaining stop quantity. Optional
+take-profit absence is permitted. Emergency closes share the surviving exits'
+OCA group. Incompatible exits must first confirm cancellation within
+``broker_request_timeout``; otherwise reconciliation fails without submitting
+an independent close. Active entries, closes and rolls retain their sequencing.
+
+Only one account/subaccount is supported per process. Broker position comparison
+uses account and concrete conId, and rejects snapshots spanning accounts.
+Unknown active broker orders fail reconciliation when
+``cancel_unknown_trades=False``; those orders remain untouched. Setting it to
+``True`` permits cancellation followed by another reconciliation pass.
+
 .. _position-mismatch-policy:
 
 Position mismatches and offline repair
@@ -937,6 +961,11 @@ recover broker state. Known executions, including offline partial fills, are
 accounted before comparison. Decisions are deferred for Contracts with active
 OPEN, CLOSE, TARGET_ADJUSTMENT, or attributed roll orders. A pending roll plan
 alone does not excuse a mismatch. Standing protective orders do not defer it.
+Complete sync cycles are serialized, including retries and broker requests.
+Broker request unavailability requests supervisor recovery even on the last
+local attempt. A disappeared partially filled order requires terminal broker
+history: partial execution evidence is accounted, but cannot prove cancellation
+of its remainder. Missing terminal evidence fails reconciliation explicitly.
 
 ``controller.position_mismatch_policy`` applies during startup, reconnect and
 periodic synchronization:

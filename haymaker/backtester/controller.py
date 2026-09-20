@@ -24,20 +24,13 @@ class SimulationController(Controller):
     target verification is intentionally disabled during replay.
     """
 
-    def __post_init__(self) -> None:
-        """Wire normal Controller callbacks and enable them for replay."""
-
-        super().__post_init__()
-        self.release_hold()
-
     async def run(self) -> SyncOutcome:
         """Enable replay callbacks without reconciliation or runtime timers.
 
         Returns:
-            SyncOutcome.OK after releasing Controller's startup hold.
+            SyncOutcome.OK without live broker reconciliation.
         """
 
-        self.release_hold()
         return SyncOutcome.OK
 
     async def onData(

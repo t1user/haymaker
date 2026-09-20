@@ -43,7 +43,6 @@ from typing import TYPE_CHECKING
 import ib_insync as ibi
 
 from haymaker import misc
-from haymaker.book import OrderInfo
 from haymaker.components.messages import StandardOrderRole
 
 from .sync_brackets import BracketSyncAction, BracketSyncError
@@ -108,7 +107,6 @@ class SyncCoordinator:
         """
         self.controller = controller
         self.request_restart = False
-        self._faulty_trades: list[OrderInfo] = []
         self._restart_before_correction = restart_before_correction
 
     async def run(self) -> bool:
@@ -137,19 +135,36 @@ class SyncCoordinator:
             return False
 
         try:
-            order_sync = OrderSync(self.controller.ib, self.controller.book)
+            order_sync = OrderSync(self.controller.ib, self.controller.book).run()
+            if order_sync.unresolved:
+                try:
+                    completed = await asyncio.wait_for(
+                        self.controller.ib.reqCompletedOrdersAsync(apiOnly=False),
+                        self.controller.broker_request_timeout,
+                    )
+                except Exception:
+                    log.warning(
+                        "Completed-order history unavailable; terminal status remains unresolved"
+                    )
+                    completed = []
+                order_sync.resolve_completed_trades(completed)
         except (TypeError, ValueError) as exc:
             raise SyncBrokenStateError(
                 "Order execution evidence is inconsistent"
             ) from exc
 
-        self.controller.release_hold()
         if order_sync.done:
             self.handle_done_trades(order_sync.done)
         if order_sync.recovered_fills:
             self.handle_recovered_fills(order_sync.recovered_fills)
         if order_sync.done or order_sync.recovered_fills:
             await asyncio.sleep(0)
+        await self.recover_commissions()
+        if order_sync.unresolved:
+            raise SyncBrokenStateError(
+                "Order terminal status unresolved after execution recovery: "
+                f"{[trade.order.orderId for trade in order_sync.unresolved]}"
+            )
 
         position_sync = PositionSync(
             position_snapshot.positions,
@@ -170,6 +185,10 @@ class SyncCoordinator:
                     "repair accounting offline and restart the process"
                 )
 
+        if order_sync.unknown and not self.controller.cancel_unknown_trades:
+            raise SyncBrokenStateError(
+                "Unknown broker orders remain active; cancel_unknown_trades=False"
+            )
         if (order_sync.is_error or position_errors) and self._restart_before_correction:
             self.request_restart = True
             return False
@@ -197,7 +216,7 @@ class SyncCoordinator:
                 )
             except PositionsOutOfSync as exc:
                 raise SyncBrokenStateError(
-                    "local state does not match broker state"
+                    f"local state does not match broker state: {exc}"
                 ) from exc
             return False
 
@@ -208,12 +227,13 @@ class SyncCoordinator:
 
         self.controller.recover_protection()
         try:
-            BracketSyncAction.from_policy(
+            action = BracketSyncAction.from_policy(
                 self.controller.missing_brackets,
                 self.controller,
             )
+            await action.run()
         except BracketSyncError as exc:
-            raise SyncBrokenStateError("bracket sync failed") from exc
+            raise SyncBrokenStateError(f"bracket sync failed: {exc}") from exc
         return True
 
     def handle_unknown_trades(self, trades: list[ibi.Trade]) -> bool:
@@ -246,10 +266,33 @@ class SyncCoordinator:
             self.controller.ib.orderStatusEvent.emit(trade)
             for fill in trade.fills:
                 self.controller.ib.execDetailsEvent.emit(trade, fill)
-            if trade.orderStatus.status == "Filled":
-                self.controller.ib.commissionReportEvent.emit(
-                    trade, trade.fills[-1], trade.fills[-1].commissionReport
-                )
+
+    async def recover_commissions(self) -> None:
+        """Recover late per-execution reports for working and terminal records."""
+        for fill in self.controller.ib.fills():
+            report = fill.commissionReport
+            if not report.execId:
+                continue
+            info = self.controller.book.orders.by_perm_id(fill.execution.permId)
+            if info is None:
+                candidate = self.controller.book.orders.by_id(fill.execution.orderId)
+                if (
+                    candidate is not None
+                    and candidate.trade.order.clientId == fill.execution.clientId
+                ):
+                    info = candidate
+            if info is None:
+                continue
+            record = next(
+                (
+                    record
+                    for record in info.fills
+                    if record.execution.execId == report.execId
+                ),
+                None,
+            )
+            if record is not None and record.commission_report != report:
+                await self.controller.onCommissionReport(info.trade, fill, report)
 
     def handle_recovered_fills(
         self, executions: list[tuple[ibi.Trade, ibi.Fill]]
@@ -271,9 +314,6 @@ class SyncCoordinator:
         """
         for trade in trades:
             order_id = trade.order.orderId
-            info = self.controller.book.orders.by_id(order_id)
-            if info is not None:
-                self._faulty_trades.append(info)
             self.controller.book.prune_order(order_id)
             log.warning(
                 "Pruned stale local order %s; order was absent at broker.",
@@ -395,23 +435,10 @@ class SyncCoordinator:
                     [state.source_key for state in states],
                 )
             elif states:
-                source_faults = [
-                    order_info.source_key
-                    for order_info in self._faulty_trades
-                    if order_info.source_key is not None
-                ]
-                for state in states:
-                    if state.source_key in source_faults:
-                        self.controller.book.update_position(
-                            state.corrected(
-                                0.0,
-                                corrected_at,
-                            )
-                        )
-                        log.error(
-                            "Position records zeroed for %s after faulty trade.",
-                            state.source_key,
-                        )
+                raise PositionsOutOfSync(
+                    f"Ambiguous source attribution for conId={contract.conId}; "
+                    "missing orders do not establish source exposure"
+                )
 
             else:
                 # too risky to make assumptions about strategy (what about sl?)
@@ -420,7 +447,6 @@ class SyncCoordinator:
                     f"{states=}."
                 )
                 raise PositionsOutOfSync
-            self._faulty_trades.clear()
 
 
 async def verify_broker_position_source(
@@ -454,13 +480,20 @@ async def verify_broker_position_source(
         log.warning("Broker position request failed: %r", exc)
         return BrokerPositionSnapshot(BrokerPositionStatus.REQUEST_UNAVAILABLE)
 
+    accounts = {
+        position.account for position in (*cached_positions, *requested_positions)
+    }
+    if len(accounts) > 1:
+        raise SyncBrokenStateError(
+            f"Expected one account/subaccount, received {sorted(accounts)}"
+        )
     cached_quantities = {
-        position.contract.localSymbol: position.position
+        (position.account, position.contract.conId): position.position
         for position in cached_positions
         if position.position
     }
     requested_quantities = {
-        position.contract.localSymbol: position.position
+        (position.account, position.contract.conId): position.position
         for position in requested_positions
         if position.position
     }

@@ -186,6 +186,11 @@ and distinguish pre-existing failures from regressions.
   Contract, including opposing logical one-to-one positions. Use one successful
   `reqPositionsAsync()` snapshot per pass. Cached/fresh disagreement retries
   locally; timeout/unavailable requests use supervisor recovery.
+  Enforce one account/subaccount; compare snapshots by account and conId.
+  Unknown active orders fail sync unless cancellation is explicitly configured.
+  Callback accounting is always active; do not reintroduce a callback hold.
+  Roll discovery requires reconciled connection state; a cache mismatch defers
+  discovery to reconciliation rather than persisting a blocked roll.
 - `controller.position_mismatch_policy` is `fail` by default, with `correct`
   opting into inferred one-to-one corrections. Enforce failure before order
   shortcuts, roll advancement and protection recovery. Failed reconciliation

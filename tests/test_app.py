@@ -395,7 +395,7 @@ async def test_live_runtime_cleans_up_strategy_and_safety_waiter(
 
 
 @pytest.mark.asyncio
-async def test_live_runtime_stop_cancels_timeouts_before_controller_hold(
+async def test_live_runtime_stop_cancels_timeouts_before_broker_work_suspension(
     monkeypatch,
 ) -> None:
     """Workload stop should disable stale-data callbacks before other cleanup."""
@@ -403,8 +403,8 @@ async def test_live_runtime_stop_cancels_timeouts_before_controller_hold(
     events: list[str] = []
 
     class FakeController:
-        def set_hold(self) -> None:
-            events.append("hold")
+        def suspend_broker_work(self) -> None:
+            events.append("broker-work")
 
     runtime = object.__new__(LiveRuntime)
     runtime.context = cast(
@@ -418,7 +418,7 @@ async def test_live_runtime_stop_cancels_timeouts_before_controller_hold(
 
     await runtime.stop("restart requested")
 
-    assert events == ["timeouts", "hold"]
+    assert events == ["timeouts", "broker-work"]
 
 
 @pytest.mark.asyncio

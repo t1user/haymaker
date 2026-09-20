@@ -87,7 +87,7 @@ class Controller(Atom):
     health_check_observables: list[list[Callable[[], bool]]] = field(
         default_factory=list
     )
-    _hold: bool = field(default=True, repr=False)
+    _broker_ready: bool = field(default=False, init=False, repr=False)
     _sync_timer: ev.Timer | None = field(default=None, repr=False)
     _health_check_timer: ev.Timer | None = field(default=None, repr=False)
     _order_loggers: OrderLoggers | None = field(default=None, repr=False)
@@ -138,6 +138,7 @@ class Controller(Atom):
     def __post_init__(self) -> None:
         Atom.__init__(self)
         self.future_roller = FutureRoller(self)
+        self.ib.disconnectedEvent.connect(self.suspend_broker_work)
         self.ignore_errors = _broker_messages_to_ignore(self.ignore_errors)
         if self.position_mismatch_policy not in ("correct", "fail"):
             raise ControllerError(
@@ -157,7 +158,6 @@ class Controller(Atom):
         )
         if self.log_order_events:
             self._order_loggers = OrderLoggers(self.ib)
-        self.set_hold()
         if missing := self.verify_have_contracts_for_positions():
             log.critical("No qualified contracts for open position: %s", missing)
 
@@ -229,14 +229,20 @@ class Controller(Atom):
             if position.contract not in self.contract_registry.all_contracts
         ]
 
-    def set_hold(self) -> None:
-        self._hold = True
-        log.debug("hold set")
+    def suspend_broker_work(self) -> None:
+        """Defer roll discovery until reconciliation completes again."""
+        self._broker_ready = False
 
-    def release_hold(self) -> None:
-        if self._hold:
-            self._hold = False
-            log.debug("hold released")
+    @property
+    def broker_ready(self) -> bool:
+        """Whether scheduled broker work can use reconciled connection state."""
+        return (
+            self._broker_ready
+            and self.ib.isConnected()
+            and not self._trading_disabled
+            and not self._sync_lock.locked()
+            and (self._sync_abort_event is None or not self._sync_abort_event.is_set())
+        )
 
     def set_future_roll_policies(self, policies: Mapping[str, bool]) -> None:
         """Install the one-to-one source policies collected during composition."""
@@ -276,7 +282,7 @@ class Controller(Atom):
         """Reconcile broker state and arm runtime timers."""
 
         self._ensure_runtime_timers_started()
-        self.set_hold()
+        self.suspend_broker_work()
         if self.nuke:
             self.execute_emergency_reset()
         outcome = await self.sync()
@@ -313,9 +319,17 @@ class Controller(Atom):
     def roll_futures(self, *args: object) -> None:
         """Run one scheduled futures-roll discovery pass."""
 
-        if self._trading_disabled or self._hold or self._sync_lock.locked():
-            return
         self.future_roller.roll()
+
+    def request_position_sync(self) -> None:
+        """Schedule reconciliation after roll discovery sees unsettled positions."""
+        asyncio.get_running_loop().create_task(
+            self._sync_before_roll(), name="roll-position-sync"
+        )
+
+    async def _sync_before_roll(self) -> None:
+        if await self.sync() is SyncOutcome.OK:
+            self.future_roller.roll()
 
     def schedule_future_roll(self) -> None:
         """Install the single app-lifetime daily UTC roll callback."""
@@ -372,6 +386,7 @@ class Controller(Atom):
 
     async def _sync_attempts(self) -> SyncOutcome:
         """Retry transient broker state and latch terminal reconciliation faults."""
+        self._broker_ready = False
         if not self.ib.isConnected():
             return SyncOutcome.FAILED
         for attempt in range(1, self.sync_max_attempts + 1):
@@ -380,14 +395,17 @@ class Controller(Atom):
             try:
                 if await coordinator.run():
                     self._restart_before_correction = False
+                    self._broker_ready = True
                     return SyncOutcome.OK
             except SyncBrokenStateError as exc:
                 self.disable_trading(str(exc))
                 return SyncOutcome.FAILED
+            if self._sync_abort_event is not None and self._sync_abort_event.is_set():
+                return SyncOutcome.ABORTED
+            if coordinator.request_restart:
+                return self._request_sync_restart()
             if attempt < self.sync_max_attempts:
                 await asyncio.sleep(self.sync_resync_delay)
-                if coordinator.request_restart:
-                    return self._request_sync_restart()
         if self._sync_abort_event is not None and self._sync_abort_event.is_set():
             return SyncOutcome.ABORTED
         self.disable_trading("sync did not converge")
@@ -553,8 +571,6 @@ class Controller(Atom):
 
     def onOrderStatusEvent(self, trade: ibi.Trade) -> None:
         """Persist status changes and rebind current live Trade objects."""
-        if self._hold:
-            return
         if self.book.rebind_trade(trade) is not None:
             if not trade.order.orderId:
                 log.warning(
@@ -562,7 +578,10 @@ class Controller(Atom):
                     trade.order.permId,
                 )
                 return
-            self.book.save_order(self._unknown_order_info(trade))
+            log.debug(
+                "Unattributed order status awaits reconciliation: %s",
+                trade.order.orderId,
+            )
 
     def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """Apply one execution idempotently to Book projections."""
@@ -577,8 +596,8 @@ class Controller(Atom):
             log.exception("Cannot apply fill for orderId=%s", trade.order.orderId)
             return
         if not changed:
-            log.warning(
-                "Abandoned duplicate fill execId=%s orderId=%s",
+            log.debug(
+                "Ignored duplicate fill execId=%s orderId=%s",
                 fill.execution.execId,
                 trade.order.orderId,
             )
@@ -603,7 +622,7 @@ class Controller(Atom):
     ) -> None:
         """Persist final commission evidence and optionally write a blotter row."""
 
-        if self._hold or not trade.order.orderId:
+        if not trade.order.orderId and not trade.order.permId:
             return
         await asyncio.sleep(0)
         info = self.book.orders.by_id(
@@ -882,8 +901,6 @@ class Controller(Atom):
         self._new_position_lock = True
 
     def log_order_status(self, trade: ibi.Trade) -> None:
-        if self._hold:
-            return
         if trade.order.orderId < 0:
             log.warning("Manual trade status update: %s", trade.orderStatus)
         elif trade.isDone():

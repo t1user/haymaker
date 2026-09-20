@@ -155,7 +155,7 @@ class SimulationRuntime:
             futures_roll_margin_bdays: NEXT futures selection lead time.
 
         Returns:
-            Ready runtime with Controller hold released for strategy orders.
+            Ready runtime for replay strategy orders.
         """
 
         ib = SimulatedIB(
@@ -192,7 +192,6 @@ class SimulationRuntime:
         Atom.set_runtime_context(context)
         controller = SimulationController(trader=trader)
         context.controller = controller
-        controller.release_hold()
         return cls(ib, registry, book, context, controller)
 
     async def close(self) -> None:

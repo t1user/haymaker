@@ -38,7 +38,6 @@ def episode(atom_runtime_factory):
     runtime = atom_runtime_factory(ib=broker)
     controller = Controller(trader=runtime.trader)
     runtime.bind_controller(controller)
-    controller.release_hold()
     contract = ibi.Future("ES", conId=101, exchange="CME", localSymbol="ESU6")
     signal = EpisodeSignalModel("alpha", contract, SignalType.EVENT)
     processor = BinarySignalProcessor(
@@ -225,7 +224,6 @@ async def test_reversal_recovers_new_contract_without_close_filled_callback(
     fresh = atom_runtime_factory(ib=replacement, book_=recovered)
     controller = Controller(trader=fresh.trader)
     fresh.bind_controller(controller)
-    controller.release_hold()
     for trade in replacement.submitted:
         recovered.rebind_trade(trade)
     resumed = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))

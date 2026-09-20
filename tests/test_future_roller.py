@@ -116,6 +116,14 @@ class FakeController:
         self.ib = SimpleNamespace()
         self.trades: list[ibi.Trade] = []
         self.cancelled: list[ibi.Trade] = []
+        self.broker_ready = True
+        self.sync_requested = False
+
+    def suspend_broker_work(self) -> None:
+        self.broker_ready = False
+
+    def request_position_sync(self) -> None:
+        self.sync_requested = True
 
     def trade(
         self,

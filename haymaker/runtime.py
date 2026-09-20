@@ -379,10 +379,10 @@ class LiveRuntime:
             await asyncio.gather(strategy, disabled, return_exceptions=True)
 
     async def stop(self, reason: str) -> None:
-        """Put the controller on hold while supervised work stops."""
+        """Suspend broker work and market-data monitors as supervised work stops."""
 
         MarketDataTimeout._cancel_all()
-        self.context.controller.set_hold()
+        self.context.controller.suspend_broker_work()
         log.debug("Stopping live runtime: %s", reason)
 
     async def close(self) -> None:

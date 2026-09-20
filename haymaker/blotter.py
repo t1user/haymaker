@@ -54,7 +54,7 @@ class Blotter:
         row = {
             "local_time": datetime.now(),
             "sys_time": datetime.now(timezone.utc),  # system time
-            "last_fill_time": trade.log[-1].time,
+            "last_fill_time": max(fill.time for fill in trade.fills),
             "contract": (
                 trade.contract.localSymbol
                 if not isinstance(trade.contract, ibi.Bag)
@@ -95,17 +95,23 @@ class Blotter:
         fills = [
             fill
             for fill in trade.fills
-            # empty objects sometimes added here by ib
-            if fill.commissionReport.execId != ""
             # rarely, there's a bug in ib data, where unrelated
             # fill appears in the list (probably only in paper acc)
             # it's a precaution
-            and fill.execution.permId == trade.order.permId
+            if fill.execution.permId == trade.order.permId
         ]
 
         comms = [fill.commissionReport for fill in fills]
 
-        if trade.isDone() and (len(comms) == len(fills)):
+        if (
+            trade.isDone()
+            and fills
+            and all(
+                fill.commissionReport.execId == fill.execution.execId
+                and fill.commissionReport.execId
+                for fill in fills
+            )
+        ):
             self.log_trade(trade, comms, **kwargs)
 
     def save_report(self, report: dict[str, Any]) -> None:

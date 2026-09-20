@@ -387,6 +387,11 @@ class Book:
                     commission_report=report,
                 )
                 info.fills = tuple(records)
+                # Historical reports need to update Trade diagnostics too;
+                # the callback's Fill can be a different broker-history object.
+                for trade_fill in trade.fills:
+                    if _execution_key(trade, trade_fill) == key:
+                        ibi.util.dataclassUpdate(trade_fill.commissionReport, report)
                 self.save_order(info)
                 return True
         # Complete Trade diagnostics still matter when no normalized fill matches.

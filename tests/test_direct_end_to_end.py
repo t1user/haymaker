@@ -67,7 +67,6 @@ def direct(atom_runtime_factory):
     runtime = atom_runtime_factory(ib=broker)
     controller = Controller(trader=runtime.trader)
     runtime.bind_controller(controller)
-    controller.release_hold()
     portfolio = AllocatingPortfolio()
     model = SerialTargetExecutionModel(name="serial")
     router = ExecutionRouter([ExecutionRule(predicate=symbol_is("ES"), model=model)])

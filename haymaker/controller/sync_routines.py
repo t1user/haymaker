@@ -23,8 +23,19 @@ class OrderSync:
         self.inactive: list[ibi.Trade] = []
         self.done: list[ibi.Trade] = []
         self.errors: list[ibi.Trade] = []
+        self.unresolved: list[ibi.Trade] = []
         self.recovered_fills: list[tuple[ibi.Trade, ibi.Fill]] = []
-        self.update_trades().review_trades().handle_inactive_trades().report()
+        self._fills_by_perm_id: dict[int, list[ibi.Fill]] = {}
+        self._fills_by_order_id: dict[tuple[int, int], list[ibi.Fill]] = {}
+        for fill in ib.fills():
+            self._fills_by_perm_id.setdefault(fill.execution.permId, []).append(fill)
+            self._fills_by_order_id.setdefault(
+                (fill.execution.clientId, fill.execution.orderId), []
+            ).append(fill)
+
+    def run(self) -> Self:
+        """Rebind, recover and classify one pass explicitly."""
+        return self.update_trades().review_trades().handle_inactive_trades().report()
 
     @property
     def lists(self) -> tuple[list[ibi.Trade], list[ibi.Trade], list[ibi.Trade]]:
@@ -64,15 +75,10 @@ class OrderSync:
         """Return execution-history fills attributable to one broker Trade."""
 
         return tuple(
-            fill
-            for fill in self.ib.fills()
-            if (
-                fill.execution.permId == trade.order.permId
-                if trade.order.permId
-                else (
-                    fill.execution.orderId == trade.order.orderId
-                    and fill.execution.clientId == trade.order.clientId
-                )
+            self._fills_by_perm_id.get(trade.order.permId, [])
+            if trade.order.permId
+            else self._fills_by_order_id.get(
+                (trade.order.clientId, trade.order.orderId), []
             )
         )
 
@@ -102,8 +108,14 @@ class OrderSync:
             if current is None:
                 self.errors.append(old_trade)
             else:
-                self.done.append(current)
                 self.book.rebind_trade(current)
+                if current.isDone():
+                    self.done.append(current)
+                else:
+                    self.recovered_fills.extend(
+                        (current, fill) for fill in self._unseen_fills(current)
+                    )
+                    self.unresolved.append(current)
         return self
 
     def _reconstruct_from_fills(self, trade: ibi.Trade) -> ibi.Trade | None:
@@ -115,6 +127,30 @@ class OrderSync:
         if not fills and not info.fills:
             return None
         return info.execution_trade(fills)
+
+    def resolve_completed_trades(self, completed: list[ibi.Trade]) -> None:
+        """Resolve missing terminal status using broker completed-order evidence."""
+        known = {
+            trade.order.permId: trade
+            for trade in completed
+            if trade.order.permId and trade.isDone()
+        }
+        for trade in tuple(self.unresolved):
+            terminal = known.get(trade.order.permId)
+            if terminal is None:
+                continue
+            terminal.order.orderId = trade.order.orderId
+            info = self.book.orders.by_id(trade.order.orderId)
+            if info is None:
+                raise ValueError("Unresolved trade lost its Book record")
+            terminal.fills = info.execution_trade((*trade.fills, *terminal.fills)).fills
+            self.book.rebind_trade(terminal)
+            self.recovered_fills = [
+                (terminal if recovered is trade else recovered, fill)
+                for recovered, fill in self.recovered_fills
+            ]
+            self.unresolved.remove(trade)
+            self.done.append(terminal)
 
     def report(self) -> Self:
         if self.recovered_fills or any(self.lists):
@@ -161,7 +197,7 @@ class PositionSync:
 
     def report(self) -> Self:
         if self.errors:
-            log.critical(
+            log.debug(
                 "Failed to match Book positions to broker: %s",
                 {
                     contract.localSymbol or contract.symbol: difference

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
@@ -137,6 +138,9 @@ class BracketSyncAction(ABC):
     def __init__(self, controller: Controller) -> None:
         self.controller = controller
         self.bracket_sync = BracketSync(controller)
+
+    async def run(self) -> None:
+        """Execute the selected policy after construction."""
         self.sync()
 
     @abstractmethod
@@ -199,6 +203,47 @@ class WarnBracketSyncAction(BracketSyncAction):
 
 class RemoveBracketSyncAction(BracketSyncAction):
     """Close missing-bracket sources and cancel obsolete brackets."""
+
+    async def run(self) -> None:
+        """Confirm incompatible exit cancellations before submitting a close."""
+        cancelled: list[ibi.Trade] = []
+        for issue in self.bracket_sync.missing_brackets:
+            state = issue.state
+            exits = [info.trade for info in issue.existing_orders]
+            groups = {(trade.order.ocaGroup, trade.order.ocaType) for trade in exits}
+            incompatible = (
+                any(
+                    trade.contract != state.contract
+                    or trade.order.action != ("SELL" if state.quantity > 0 else "BUY")
+                    or trade.remaining() != abs(state.quantity)
+                    or not trade.order.ocaGroup
+                    or trade.order.ocaType not in {1, 2, 3}
+                    for trade in exits
+                )
+                or len(groups) > 1
+            )
+            if incompatible:
+                for trade in exits:
+                    self.controller.cancel(trade)
+                    cancelled.append(trade)
+        if cancelled:
+
+            async def confirmed() -> None:
+                while any(not trade.isDone() for trade in cancelled):
+                    await asyncio.sleep(0.01)
+
+            try:
+                await asyncio.wait_for(
+                    confirmed(), self.controller.broker_request_timeout
+                )
+            except asyncio.TimeoutError as exc:
+                raise BracketSyncError(
+                    "Protective exit cancellation unconfirmed"
+                ) from exc
+            # A protective exit may have filled while cancellation was pending.
+            await asyncio.sleep(0)
+            self.bracket_sync = BracketSync(self.controller)
+        self.sync()
 
     def sync(self) -> None:
         self.report()

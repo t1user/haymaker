@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import logging
+from functools import partial
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -35,6 +36,145 @@ from haymaker.controller.sync_coordinator import (
 )
 from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
+
+
+@pytest.mark.parametrize("failure", [asyncio.TimeoutError, RuntimeError])
+@pytest.mark.parametrize("attempts", [1, 3])
+async def test_final_request_failure_always_requests_supervisor(
+    controller, atom_runtime, monkeypatch, failure, attempts
+):
+    """Local retry exhaustion never turns unavailable broker state into a latch."""
+    controller.sync_max_attempts = attempts
+    controller.sync_resync_delay = 0
+    set_broker_state(controller, monkeypatch)
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    requested = [ibi.Position("test", contract(), 1, 100)]
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(side_effect=[requested] * (attempts - 1) + [failure()]),
+    )
+    assert await controller.sync() is SyncOutcome.ABORTED
+    assert len(atom_runtime.restart_requests) == 1
+    assert not controller._trading_disabled
+
+
+async def test_sync_serializes_requests_and_cancelled_waiter(controller, monkeypatch):
+    """A cancelled timer waiter cannot orphan another caller's IB request."""
+    set_broker_state(controller, monkeypatch)
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    started, release = asyncio.Event(), asyncio.Event()
+    requests = 0
+
+    async def positions():
+        nonlocal requests
+        requests += 1
+        started.set()
+        await release.wait()
+        return []
+
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", positions)
+    first = asyncio.create_task(controller.sync())
+    await started.wait()
+    cancelled = asyncio.create_task(controller.sync())
+    last = asyncio.create_task(controller.sync())
+    await asyncio.sleep(0)
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    assert requests == 1
+    release.set()
+    assert await first is SyncOutcome.OK
+    assert await last is SyncOutcome.OK
+    assert requests == 2
+
+
+@pytest.mark.parametrize("completed_history", [False, True])
+async def test_missing_partial_order_requires_terminal_evidence(
+    controller, trade, monkeypatch, completed_history
+):
+    """Executions are accounted even when the remainder's status is unresolved."""
+    trade.order.totalQuantity = 3
+    info = save_active_order(controller, trade)
+    execution = fill(trade)
+    terminal = deepcopy(trade)
+    terminal.orderStatus.status = ibi.OrderStatus.Cancelled
+    terminal.fills = [execution]
+    set_broker_state(
+        controller,
+        monkeypatch,
+        positions=(ibi.Position("test", trade.contract, 1, 100),),
+        fills=(execution,),
+    )
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(return_value=controller.ib.positions()),
+    )
+    monkeypatch.setattr(
+        controller.ib,
+        "reqCompletedOrdersAsync",
+        AsyncMock(return_value=[terminal] if completed_history else []),
+    )
+    controller.sync_resync_delay = 0
+    assert await controller.sync() is (
+        SyncOutcome.OK if completed_history else SyncOutcome.FAILED
+    )
+    assert controller.book.positions.quantity(trade.contract) == 1
+    assert len(info.fills) == 1
+    assert info.trade.isDone() == completed_history
+    assert controller.ib.reqCompletedOrdersAsync.await_count == 1
+
+
+async def test_snapshot_compares_concrete_identity_and_rejects_multiple_accounts(
+    controller, monkeypatch
+):
+    """Equal display symbols cannot conceal different contracts or accounts."""
+    left, right = contract(), contract()
+    right.conId += 1
+    monkeypatch.setattr(
+        controller.ib, "positions", lambda: [ibi.Position("a", left, 1, 100)]
+    )
+    request = AsyncMock(return_value=[ibi.Position("a", right, 1, 100)])
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", request)
+    assert (
+        await verify_broker_position_source(controller.ib, 1)
+    ).status is BrokerPositionStatus.SNAPSHOT_DISAGREEMENT
+    request.return_value = [ibi.Position("b", left, 1, 100)]
+    with pytest.raises(SyncBrokenStateError, match="one account/subaccount"):
+        await verify_broker_position_source(controller.ib, 1)
+
+
+async def test_multisource_correction_fails_explicitly_after_pruning(
+    controller, trade, monkeypatch, caplog
+):
+    """Real retry orchestration cannot infer ownership from a vanished close."""
+    for source, quantity in (("alpha", 3), ("beta", 2)):
+        controller.book.update_position(
+            PositionState(
+                source_key=source,
+                execution_model_name="brackets",
+                contract=trade.contract,
+                quantity=quantity,
+                target_quantity=quantity,
+            )
+        )
+    info = save_active_order(controller, trade, role=StandardOrderRole.CLOSE)
+    snapshot = [ibi.Position("test", trade.contract, 2, 100)]
+    set_broker_state(controller, monkeypatch, positions=tuple(snapshot))
+    monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
+    requested = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested)
+    controller.position_mismatch_policy = "correct"
+    controller._restart_before_correction = False
+    controller.sync_resync_delay = 0
+    assert await controller.sync() is SyncOutcome.FAILED
+    assert requested.await_count == 2
+    assert info.trade.isDone()
+    assert controller.book.positions.for_source("alpha").quantity == 3
+    assert controller.book.positions.for_source("beta").quantity == 2
+    assert "Ambiguous source attribution" in caplog.text
 
 
 class FakeTrader:
@@ -572,7 +712,6 @@ async def test_commission_report_uses_book_owned_blotter(controller_runtime):
 
     blotter = Blotter()
     runtime.book.blotter = blotter
-    controller.release_hold()
     trade = controller.trade(
         contract(),
         ibi.MarketOrder("BUY", 1),
@@ -598,7 +737,6 @@ async def test_commission_report_persists_without_blotter(controller_runtime):
     runtime, controller, _ = controller_runtime
     assert runtime.book.blotter is None
     assert len(controller.ib.commissionReportEvent) == 1
-    controller.release_hold()
     trade = controller.trade(
         contract(),
         ibi.MarketOrder("BUY", 1),
@@ -628,7 +766,6 @@ async def test_commission_report_skips_unknown_zero_order_id(
     )
     report = ibi.CommissionReport(execId="exec-1")
     execution = fill(trade)
-    controller.release_hold()
 
     with caplog.at_level(logging.DEBUG):
         await controller.onCommissionReport(trade, execution, report)
@@ -752,7 +889,7 @@ def test_ignore_bracket_policy_does_not_query_broker_or_book(
         side_effect=AssertionError("Book must not be queried")
     )
 
-    BracketSyncAction.from_policy("ignore", controller)
+    BracketSyncAction.from_policy("ignore", controller).sync()
 
 
 def test_remove_bracket_policy_closes_source_missing_required_stop(
@@ -774,7 +911,7 @@ def test_remove_bracket_policy_closes_source_missing_required_stop(
     controller.close_position_for_source = Mock()
 
     with pytest.raises(BracketSyncError):
-        BracketSyncAction.from_policy("remove", controller)
+        BracketSyncAction.from_policy("remove", controller).sync()
 
     controller.close_position_for_source.assert_called_once_with(
         "alpha",
@@ -808,7 +945,7 @@ def test_remove_bracket_policy_defers_missing_stop_during_active_open(
     controller.ib.positions = Mock(return_value=[])
     controller.close_position_for_source = Mock()
 
-    BracketSyncAction.from_policy("remove", controller)
+    BracketSyncAction.from_policy("remove", controller).sync()
 
     controller.close_position_for_source.assert_not_called()
 
@@ -835,7 +972,7 @@ def test_remove_bracket_policy_cancels_obsolete_bracket(
     controller.cancel = Mock()
 
     with pytest.raises(BracketSyncError):
-        BracketSyncAction.from_policy("remove", controller)
+        BracketSyncAction.from_policy("remove", controller).sync()
 
     controller.cancel.assert_called_once_with(bracket)
 
@@ -868,7 +1005,7 @@ def test_remove_bracket_policy_defers_obsolete_bracket_during_active_close(
     controller.ib.positions = Mock(return_value=[])
     controller.cancel = Mock()
 
-    BracketSyncAction.from_policy("remove", controller)
+    BracketSyncAction.from_policy("remove", controller).sync()
 
     controller.cancel.assert_not_called()
 
@@ -1716,8 +1853,8 @@ async def test_sync_disconnected_does_not_query_broker_state(controller, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_sync_disconnected_does_not_release_hold(controller, monkeypatch):
-    controller.set_hold()
+async def test_sync_disconnected_leaves_broker_work_suspended(controller, monkeypatch):
+    controller.suspend_broker_work()
     monkeypatch.setattr(controller.ib, "isConnected", lambda: False)
     monkeypatch.setattr(
         controller.ib,
@@ -1730,7 +1867,7 @@ async def test_sync_disconnected_does_not_release_hold(controller, monkeypatch):
     result = await controller.sync()
 
     assert result is SyncOutcome.FAILED
-    assert controller._hold
+    assert not controller.broker_ready
     assert not controller._trading_disabled
 
 
@@ -2052,9 +2189,8 @@ async def test_unknown_broker_orders_can_be_left_active_by_config(
     )
     controller.cancel_unknown_trades = False
 
-    result = await SyncCoordinator(controller).run()
-
-    assert result
+    with pytest.raises(SyncBrokenStateError, match="Unknown broker orders"):
+        await SyncCoordinator(controller).run()
     assert cancelled == []
     assert bracket_checked == []
 
@@ -2077,7 +2213,7 @@ async def test_unknown_broker_orders_skip_bracket_correction(
 
     result = await controller.sync()
 
-    assert result is SyncOutcome.OK
+    assert result is SyncOutcome.FAILED
     assert bracket_checked == []
 
 
@@ -2088,20 +2224,21 @@ async def test_open_trade_refresh_does_not_skip_bracket_sync(
     old_trade = deepcopy(trade)
     info = save_active_order(controller, old_trade)
     broker_trade = deepcopy(old_trade)
-    reconciled = []
+    selected = Mock(return_value=Mock(run=AsyncMock()))
     set_broker_state(controller, monkeypatch, open_trades=(broker_trade,))
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         BracketSyncAction,
         "from_policy",
-        staticmethod(lambda policy, received: reconciled.append((policy, received))),
+        selected,
     )
 
     result = await SyncCoordinator(controller).run()
 
     assert result
     assert info.trade is broker_trade
-    assert reconciled == [(controller.missing_brackets, controller)]
+    selected.assert_called_once_with(controller.missing_brackets, controller)
+    selected.return_value.run.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -2545,7 +2682,7 @@ async def test_broker_position_request_timeout_is_unavailable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_clean_sync_releases_hold(controller_runtime, monkeypatch):
+async def test_clean_sync_enables_broker_work(controller_runtime, monkeypatch):
     runtime, controller, _ = controller_runtime
     monkeypatch.setattr(runtime.ib, "isConnected", lambda: True)
     monkeypatch.setattr(runtime.ib, "positions", lambda: [])
@@ -2557,7 +2694,7 @@ async def test_clean_sync_releases_hold(controller_runtime, monkeypatch):
     outcome = await controller.sync()
 
     assert outcome is SyncOutcome.OK
-    assert controller._hold is False
+    assert controller.broker_ready
 
 
 @pytest.mark.asyncio
@@ -2578,7 +2715,6 @@ async def test_callbacks_rebind_accounting_before_recovery(
 ):
     """Every broker callback preserves one order identity across ID changes."""
     runtime, controller, _ = controller_runtime
-    controller.release_hold()
     opening = controller.trade(
         contract(),
         ibi.MarketOrder("BUY", 2),

@@ -247,7 +247,6 @@ async def test_known_fills_still_account_after_failure(controller, monkeypatch):
     controller.register_order(
         working, role="OPEN", execution_model_name="brackets", source_key="alpha"
     )
-    controller.release_hold()
     controller.disable_trading("position mismatch")
     execution = fill(working)
     await controller.onExecDetailsEvent(working, execution)

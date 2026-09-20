@@ -19,7 +19,48 @@ from haymaker.components import (
 )
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
+from haymaker.controller.controller import SyncOutcome
 from haymaker.details_processor import Details
+
+
+@pytest.mark.parametrize(
+    "unavailable", ["disconnected", "startup", "recovering", "syncing"]
+)
+async def test_daily_roll_defers_unavailable_state_without_persisting_block(
+    rolling, monkeypatch, unavailable
+):
+    """Process timers cannot convert an empty outage cache into durable damage."""
+    runtime, broker, controller, (old, _, _) = rolling
+    model = SerialTargetExecutionModel(name="serial")
+    model.onData(PositionTarget(contract=old, target_quantity=2))
+    await broker.fill(broker.submitted[-1])
+    original_positions = broker.positions
+    monkeypatch.setattr(broker, "positions", lambda: [])
+    if unavailable == "disconnected":
+        monkeypatch.setattr(broker, "isConnected", lambda: False)
+        broker.disconnectedEvent.emit()
+    elif unavailable == "startup":
+        controller.suspend_broker_work()
+    elif unavailable == "recovering":
+        import asyncio
+
+        event = asyncio.Event()
+        event.set()
+        controller.set_sync_abort_event(event)
+    else:
+        await controller._sync_lock.acquire()
+    controller.roll_futures()
+    assert runtime.book.rolls.all() == ()
+    assert len(broker.submitted) == 1
+    monkeypatch.setattr(broker, "positions", original_positions)
+    monkeypatch.setattr(broker, "isConnected", lambda: True)
+    if unavailable == "recovering":
+        event.clear()
+    if unavailable == "syncing":
+        controller._sync_lock.release()
+    assert await controller.sync() is SyncOutcome.OK
+    controller.roll_futures()
+    assert isinstance(broker.submitted[-1].contract, ibi.Bag)
 
 
 @pytest.mark.parametrize("close_first", [False, True])
@@ -135,7 +176,8 @@ def rolling(atom_runtime_factory, monkeypatch):
     runtime = atom_runtime_factory(ib=broker, contract_registry=registry)
     controller = Controller(trader=runtime.trader)
     runtime.bind_controller(controller)
-    controller.release_hold()
+    controller._broker_ready = True
+    monkeypatch.setattr(broker, "isConnected", lambda: True)
     return runtime, broker, controller, chain
 
 
