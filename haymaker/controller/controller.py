@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
@@ -60,6 +60,10 @@ class Controller(Atom):
     evidence in Book immediately after broker submission, applies Fill and
     commission callbacks, writes the Book-owned blotter, and verifies accepted
     absolute targets after a delay.
+
+    ``position_mismatch_policy`` defaults to ``"fail"``: unexplained broker
+    position differences disable trading without rewriting Book positions.
+    ``"correct"`` opts into inferred one-to-one position/target corrections.
     """
 
     trader: Trader
@@ -74,6 +78,7 @@ class Controller(Atom):
     broker_request_timeout: int = 10
     sync_max_attempts: int = 3
     sync_resync_delay: float = 1
+    position_mismatch_policy: Literal["correct", "fail"] = "fail"
     cancel_unknown_trades: bool = False
     missing_brackets: MissingBracketsPolicy = "ignore"
     ignore_errors: tuple[int, ...] | list[int] = field(default_factory=tuple)
@@ -92,6 +97,12 @@ class Controller(Atom):
     _health_check_triggers: list[str] = field(default_factory=list, repr=False)
     _new_position_lock: bool = False
     _trading_disabled: bool = False
+    _trading_disabled_event: asyncio.Event = field(
+        default_factory=asyncio.Event, init=False, repr=False
+    )
+    _sync_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
     _restart_before_correction: bool = True
     _sync_abort_event: asyncio.Event | None = field(default=None, repr=False)
     _future_roll_timer: ev.Event | None = field(default=None, init=False, repr=False)
@@ -128,6 +139,10 @@ class Controller(Atom):
         Atom.__init__(self)
         self.future_roller = FutureRoller(self)
         self.ignore_errors = _broker_messages_to_ignore(self.ignore_errors)
+        if self.position_mismatch_policy not in ("correct", "fail"):
+            raise ControllerError(
+                "controller.position_mismatch_policy must be correct or fail"
+            )
         if self.missing_brackets not in ("ignore", "warn", "remove"):
             raise ControllerError(
                 "controller.missing_brackets must be ignore, warn, or remove"
@@ -155,6 +170,7 @@ class Controller(Atom):
             f"Controller<sync={self.sync_frequency}s, "
             f"health_check={self.health_check_frequency}s, "
             f"future_roll={future_roll}, "
+            f"position_mismatch_policy={self.position_mismatch_policy}, "
             f"missing_brackets={self.missing_brackets}>"
         )
 
@@ -297,6 +313,8 @@ class Controller(Atom):
     def roll_futures(self, *args: object) -> None:
         """Run one scheduled futures-roll discovery pass."""
 
+        if self._trading_disabled or self._hold or self._sync_lock.locked():
+            return
         self.future_roller.roll()
 
     def schedule_future_roll(self) -> None:
@@ -345,6 +363,15 @@ class Controller(Atom):
             await asyncio.gather(sync_task, abort_task, return_exceptions=True)
 
     async def _sync(self) -> SyncOutcome:
+        # One broker position request and one safety decision at a time. A
+        # later timer/reconnect must not resume recovery after a terminal fault.
+        async with self._sync_lock:
+            if self._trading_disabled:
+                return SyncOutcome.FAILED
+            return await self._sync_attempts()
+
+    async def _sync_attempts(self) -> SyncOutcome:
+        """Retry transient broker state and latch terminal reconciliation faults."""
         if not self.ib.isConnected():
             return SyncOutcome.FAILED
         for attempt in range(1, self.sync_max_attempts + 1):
@@ -798,9 +825,24 @@ class Controller(Atom):
         )
 
     def disable_trading(self, reason: str) -> None:
+        """Block submissions and notify live runtime to end strategy work.
+
+        Args:
+            reason: Actionable explanation recorded on the first failure.
+        """
         if not self._trading_disabled:
             self._trading_disabled = True
             log.critical("Trading disabled: %s", reason)
+        self._trading_disabled_event.set()
+
+    async def wait_for_trading_disabled(self) -> None:
+        """Wait for the process-lifetime safety latch that ends live strategy work.
+
+        This remains set across reconnects. Only a new process may resume
+        trading after the underlying accounting or safety problem is repaired.
+        """
+        if not self._trading_disabled:
+            await self._trading_disabled_event.wait()
 
     def lock_new_positions(self) -> None:
         log.error("Emergency lock for new positions.")

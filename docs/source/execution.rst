@@ -925,13 +925,63 @@ waits only for OPEN, CLOSE, and TARGET_ADJUSTMENT work; protective stops and
 take-profits remain active without delaying the check. A superseded target is
 not checked or compared with the broker.
 
+.. _position-mismatch-policy:
+
+Position mismatches and offline repair
+--------------------------------------
+
 Each synchronization pass uses the successfully requested broker-position
 snapshot as its authoritative input. Cached/fresh disagreement is retried
 without reconnecting; request timeout or failure asks the supervisor to
-recover broker state. Position correction is deferred for a Contract with
-active one-to-one OPEN/CLOSE work. When correction is eventually applied, the
-one-to-one target is aligned with the broker quantity so startup recovery does
-not recreate a position that reconciliation intentionally removed.
+recover broker state. Known executions, including offline partial fills, are
+accounted before comparison. Decisions are deferred for Contracts with active
+OPEN, CLOSE, TARGET_ADJUSTMENT, or attributed roll orders. A pending roll plan
+alone does not excuse a mismatch. Standing protective orders do not defer it.
+
+``controller.position_mismatch_policy`` applies during startup, reconnect and
+periodic synchronization:
+
+* ``fail`` (default): an unexplained mismatch fails reconciliation and disables
+  trading without inferring changes to Book positions, targets or episode
+  inputs. Diagnostics include conId, Book/broker quantities, source quantities,
+  active orders and roll context. Startup does not start strategy jobs; a
+  failure during operation ends strategy jobs and the supervised workload.
+  This does not cancel broker orders or liquidate holdings. Existing orders can
+  still fill, and broker callbacks continue accounting while connected.
+* ``correct``: opt into the existing one-to-one correction rules. A sole
+  holding source absorbs the difference; broker-flat can flatten several
+  sources. Correction aligns targets to the resulting quantities and clears
+  episode recovery inputs when flat. It must be followed by a clean fresh
+  pass; ambiguous or unrecoverable state still fails. This is not a general
+  repair mechanism for direct execution or corporate actions.
+
+For deployments that intentionally accept inferred corrections:
+
+.. code-block:: yaml
+
+   controller:
+     position_mismatch_policy: correct
+
+Broker quantities cannot establish the cause of a discrepancy or its strategy
+attribution. Splits, assignments, expirations, transfers and other adjustments
+may require coordinated changes to contract identities, targets and protection.
+The policy controls mismatch-derived corrections, not genuine fill/commission
+accounting, order rebinding, startup projection repair or the existing
+manual/unknown-fill attribution rules. Matching net quantities alone cannot
+verify source attribution or detect every external event.
+
+After failure, stop the application and let its critical persistence queue
+drain before backing up and repairing the database. Correct authoritative
+records coherently: one-to-one source quantity, target, held/pending Contracts,
+episode/protection inputs and fill checkpoints, plus related orders, rolls or
+Portfolio state where applicable. Do not edit only ``balance:{conId}``: startup
+rebuilds balances from accounting records. Direct holdings derive from order/fill
+evidence and cutoffs; arbitrary external adjustments need a separately designed
+durable representation, not fabricated fills.
+
+Restart the process with Book restoration enabled after repair. A supervisor
+reconnect neither reloads database changes nor clears the trading-disabled
+latch. The default policy will fail again if the repaired state still disagrees.
 
 .. autoclass:: haymaker.book.Book
 

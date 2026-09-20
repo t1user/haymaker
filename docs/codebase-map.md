@@ -110,8 +110,9 @@ The research package is intentionally separate from live execution. It works dir
   rebinding, futures-roll scheduling/discovery/recovery coordination, emergency
   modes, and broker message handling.
   Sync retries broker-position freshness failures, back-reports known fills
-  before comparison, and requests supervisor-owned recovery before correction
-  where required.
+  before comparison, and fails unexplained position mismatches by default.
+  `position_mismatch_policy: correct` opts into inferred corrections, with
+  supervisor-owned recovery before correction where required.
   `Controller.execute_reset()` and `execute_emergency_reset()` delegate to
   `Reset` and `EmergencyReset` in `reset.py`, which own action sequencing and
   share liquidation-order construction. Controller owns registered broker
@@ -324,25 +325,32 @@ reference and never suppresses the Signal.
    only request timeout or failure asks the supervisor to recover broker state.
    The successful response is the sole broker-position snapshot used by that
    pass. The coordinator then relinks current `ibi.Trade` objects to local
-   records, back-reports known completed fills, and compares Book quantity with
-   that snapshot. Position correction is deferred for Contracts with active
-   one-to-one OPEN/CLOSE work. If unresolved order or actionable position
-   mismatches remain on the first pass, the coordinator can ask the controller
+   records, back-reports known completed and partial fills, and compares Book
+   quantity with that snapshot. Full sync cycles are serialized. Mismatch
+   decisions are deferred for Contracts with active OPEN/CLOSE/TARGET_ADJUSTMENT
+   or attributed roll orders. With the default `position_mismatch_policy: fail`,
+   unexplained mismatches disable trading before order shortcuts or recovery
+   can mutate disputed state. If unresolved order mismatches remain, or position
+   mismatches are eligible for `correct`, the coordinator can ask the controller
    to request one supervised workload restart before local order pruning,
    broker order cancellation, or position correction is allowed on a later
    pass. Applied one-to-one correction also aligns the persisted target to the
    authoritative quantity and clears episode recovery inputs when flat, so a
    supervised recovery cannot reopen the corrected position from a stale
-   setpoint. Once orders and positions are reconciled, Controller invokes
-   source-registered model protection hooks before missing-bracket remediation.
+   setpoint. Once orders and positions are reconciled, Controller resumes
+   persisted rolls and invokes source-registered model protection hooks before
+   missing-bracket remediation.
    BracketExecutionModel shares live and recovery installation, using saved held
    inputs and normalized quantity-weighted entry executions. Existing stops
    are not reinstalled, including historical terminal stops; previously active
    trailing state is outside initial protection recovery.
    Non-retryable unsafe states raise `SyncBrokenStateError`, which disables
-   trading immediately. An aborted controller run skips startup jobs for that
-   workload generation; a failed run still permits those jobs to provide
-   monitoring while outbound trading remains disabled.
+   trading immediately. An aborted or failed controller run skips startup jobs
+   for that workload generation. LiveRuntime also observes the process-lifetime
+   trading-disabled latch, cancels running strategy jobs, and ends the workload
+   for supervisor cleanup. Broker orders are not automatically cancelled or
+   liquidated; genuine callbacks continue accounting while connected. Offline
+   repair requires a full process restart with Book restoration enabled.
 5. `StartupJobs.run()` logs restart state and runs all
    registered streamers. Each streamer creates a market-session-aware timeout
    for its subscription. `LiveRuntime` cancels those workload-owned monitors

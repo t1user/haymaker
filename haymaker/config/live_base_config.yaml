@@ -38,6 +38,7 @@ controller: # Trading reconciliation, startup actions, and scheduling.
   broker_request_timeout: 10 # Seconds allowed for controller broker requests.
   sync_max_attempts: 3 # Maximum reconciliation passes per sync cycle.
   sync_resync_delay: 1 # Seconds between reconciliation passes.
+  position_mismatch_policy: fail # Unexplained Book/broker mismatch: fail, or opt into correct.
   cancel_unknown_trades: false # Cancel broker trades missing from local state.
   missing_brackets: ignore # Action for missing protection: ignore, warn, or remove.
 

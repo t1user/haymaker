@@ -64,6 +64,7 @@ def test_live_defaults_are_composed_by_target_objects() -> None:
     }
     assert config.book["restore"] is True
     assert controller["sync_frequency"] == 900
+    assert controller["position_mismatch_policy"] == "fail"
     assert futures.futures_roll_bdays == 3
     assert futures.futures_roll_margin_bdays == 3
     assert timeout.seconds == 300

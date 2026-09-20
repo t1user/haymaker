@@ -155,6 +155,9 @@ closely related runtime objects.
    Broker-facing one-run actions under ``controller.startup``, synchronization,
    health checks, execution verification, error filtering, unknown-trade policy,
    bracket policy, and futures-roll time.
+   ``position_mismatch_policy`` defaults to ``fail``; ``correct`` explicitly
+   permits inferred one-to-one Book/target corrections. See
+   :ref:`position-mismatch-policy` for trading safety and offline repair.
 
 ``book``
    Construction-time state restoration, critical-save policy, ``orders`` and

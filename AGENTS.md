@@ -186,9 +186,16 @@ and distinguish pre-existing failures from regressions.
   Contract, including opposing logical one-to-one positions. Use one successful
   `reqPositionsAsync()` snapshot per pass. Cached/fresh disagreement retries
   locally; timeout/unavailable requests use supervisor recovery.
-- Defer position corrections while attributed OPEN/CLOSE orders work. Applied
-  one-to-one corrections align both quantity and target to broker authority;
-  flattening clears episode recovery inputs but preserves the direction block.
+- `controller.position_mismatch_policy` is `fail` by default, with `correct`
+  opting into inferred one-to-one corrections. Enforce failure before order
+  shortcuts, roll advancement and protection recovery. Failed reconciliation
+  skips strategy startup; the trading-disabled latch ends running strategy work
+  and persists across reconnects. Keep genuine fill/commission accounting active.
+  See the execution guide's position-mismatch and offline-repair contract.
+- Defer mismatch decisions while attributed OPEN/CLOSE/TARGET_ADJUSTMENT or
+  roll orders work, not merely because a roll plan exists. Applied opt-in
+  corrections align quantity and target; flattening clears episode recovery
+  inputs but preserves the direction block. Serialize full sync cycles.
 - After order/fill and position reconciliation, Controller invokes model-owned
   initial-protection recovery before missing-bracket remediation. See the
   components guide for model inputs and installation limits.

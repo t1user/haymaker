@@ -256,7 +256,7 @@ async def test_live_runtime_propagates_startup_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> None:
-    """Live startup should apply policies and run monitoring after controller."""
+    """Live startup should start strategy jobs only after successful sync."""
 
     events: list[object] = []
 
@@ -266,7 +266,10 @@ async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> N
 
         async def run(self) -> SyncOutcome:
             events.append("controller")
-            return SyncOutcome.FAILED
+            return SyncOutcome.OK
+
+        async def wait_for_trading_disabled(self) -> None:
+            await asyncio.Event().wait()
 
     class FakeStartupJobs:
         async def init_data(self) -> None:
@@ -303,10 +306,12 @@ async def test_live_runtime_runs_startup_jobs_after_controller(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_live_runtime_skips_startup_jobs_after_aborted_controller(
+@pytest.mark.parametrize("outcome", [SyncOutcome.ABORTED, SyncOutcome.FAILED])
+async def test_live_runtime_skips_startup_jobs_after_unsuccessful_controller(
     monkeypatch,
+    outcome,
 ) -> None:
-    """A requested restart must end the workload before broker jobs start."""
+    """A failed or aborted reconciliation must not start the strategy."""
 
     events: list[str] = []
 
@@ -316,7 +321,7 @@ async def test_live_runtime_skips_startup_jobs_after_aborted_controller(
 
         async def run(self) -> SyncOutcome:
             events.append("controller")
-            return SyncOutcome.ABORTED
+            return outcome
 
     class FakeStartupJobs:
         async def init_data(self) -> None:
@@ -344,6 +349,49 @@ async def test_live_runtime_skips_startup_jobs_after_aborted_controller(
     await runtime.start()
 
     assert events == ["contract-details", "controller", "timeouts"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["disabled", "cancelled", "exception"])
+async def test_live_runtime_cleans_up_strategy_and_safety_waiter(
+    atom_runtime, monkeypatch, finish
+) -> None:
+    """Periodic safety failures end the workload; other exits leave no waiter."""
+    runtime = make_live_runtime(atom_runtime)
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+    release = asyncio.Event()
+
+    async def strategy() -> None:
+        started.set()
+        try:
+            await release.wait()
+            raise RuntimeError("strategy failed")
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(runtime.startup_jobs, "run", strategy)
+    task = asyncio.create_task(runtime._run_strategy())
+    await asyncio.wait_for(started.wait(), 1)
+    if finish == "disabled":
+        runtime.context.controller.disable_trading("unresolved position mismatch")
+        await asyncio.wait_for(task, 1)
+        await asyncio.wait_for(
+            runtime.context.controller.wait_for_trading_disabled(), 1
+        )
+    elif finish == "cancelled":
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        release.set()
+        with pytest.raises(RuntimeError, match="strategy failed"):
+            await task
+    assert stopped.is_set()
+    assert not any(
+        pending.get_name() in {"live-strategy", "trading-disabled"}
+        for pending in asyncio.all_tasks()
+    )
 
 
 @pytest.mark.asyncio

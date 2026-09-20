@@ -13,12 +13,12 @@ retaining that one broker-position snapshot. The ordered flow is:
    fills for known orders that executed while the process was disconnected,
    whether they remain working or completed.
 2. Compare local aggregate logical Book positions with the fresh broker
-   snapshot, deferring Contracts with active OPEN/CLOSE work.
-3. Correct local position records when the existing recovery rules allow it,
-   aligning their persisted targets to the authoritative broker quantity.
+   snapshot, deferring Contracts with active position-changing work.
+3. Fail on unexplained mismatches by default. With ``position_mismatch_policy``
+   set to ``correct``, apply the existing position/target correction rules.
 4. Skip correction trades when unresolved unknown broker orders remain active.
-5. Let registered ExecutionModels restore missed initial brackets using the
-   reconciled entry fills and already initialized Contract details.
+5. Resume persisted rolls and let ExecutionModels restore initial brackets
+   using reconciled entry fills and already initialized Contract details.
 6. Delegate remaining bracket-record and broker stop-loss protection handling to
    :mod:`haymaker.controller.sync_brackets`.
 
@@ -27,6 +27,7 @@ action returns ``False`` so :meth:`Controller.sync` can start a fresh pass from
 current broker/local state.  A caller can request a reconnect-before-correction
 mode so known-fill housekeeping runs first, but unresolved order or position
 errors only set ``request_restart`` instead of mutating broker/local state.
+The default position-mismatch failure policy takes precedence over that gate.
 Non-retryable unsafe state raises ``SyncBrokenStateError``.
 """
 
@@ -102,7 +103,8 @@ class SyncCoordinator:
                 position mismatches set ``request_restart`` and end the pass
                 before cancelling unknown orders, pruning local order records,
                 or changing logical positions.  Trade-object refreshes and
-                known completed-fill back-reporting still run first.
+                known completed-fill back-reporting still run first. The
+                ``fail`` position-mismatch policy takes precedence.
         """
         self.controller = controller
         self.request_restart = False
@@ -149,16 +151,24 @@ class SyncCoordinator:
         if order_sync.done or order_sync.recovered_fills:
             await asyncio.sleep(0)
 
-        try:
-            self.controller.future_roller.recover()
-        except (RuntimeError, TypeError, ValueError) as exc:
-            raise SyncBrokenStateError("futures roll recovery failed") from exc
-
         position_sync = PositionSync(
             position_snapshot.positions,
             self.controller.book,
         )
         position_errors = self._defer_active_position_errors(position_sync.errors)
+
+        if position_errors:
+            self._report_position_errors(
+                position_errors, position_sync.broker_positions
+            )
+            if self.controller.position_mismatch_policy == "fail":
+                # Apply this before restart/order shortcuts and any roll or
+                # protection recovery. A fresh net quantity cannot explain an
+                # external adjustment or authorize a change of attribution.
+                raise SyncBrokenStateError(
+                    "position mismatch (position_mismatch_policy=fail); "
+                    "repair accounting offline and restart the process"
+                )
 
         if (order_sync.is_error or position_errors) and self._restart_before_correction:
             self.request_restart = True
@@ -190,6 +200,11 @@ class SyncCoordinator:
                     "local state does not match broker state"
                 ) from exc
             return False
+
+        try:
+            self.controller.future_roller.recover()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise SyncBrokenStateError("futures roll recovery failed") from exc
 
         self.controller.recover_protection()
         try:
@@ -269,29 +284,71 @@ class SyncCoordinator:
         self,
         errors: dict[ibi.Contract, float],
     ) -> dict[ibi.Contract, float]:
-        """Defer position correction while one-to-one work can still fill."""
+        """Defer decisions for Contracts with attributed work still filling."""
 
         actionable: dict[ibi.Contract, float] = {}
         for contract, difference in errors.items():
             adjustments = tuple(
                 info
-                for info in self.controller.book.orders.active(contract=contract)
-                if info.role
-                in {
-                    StandardOrderRole.OPEN,
-                    StandardOrderRole.CLOSE,
-                }
+                for info in self.controller.book.orders.active()
+                if (
+                    info.trade.contract == contract
+                    and info.role
+                    in {
+                        StandardOrderRole.OPEN,
+                        StandardOrderRole.CLOSE,
+                        StandardOrderRole.TARGET_ADJUSTMENT,
+                    }
+                )
+                or (
+                    info.role == StandardOrderRole.ROLL
+                    and contract
+                    in (
+                        info.params.get("old_contract"),
+                        info.params.get("new_contract"),
+                    )
+                )
             )
             if adjustments:
                 log.info(
                     "Deferring position reconciliation for %s while "
-                    "OPEN/CLOSE order(s) remain active: %s",
+                    "position-changing order(s) remain active: %s",
                     contract.localSymbol or contract.symbol,
                     [info.orderId for info in adjustments],
                 )
             else:
                 actionable[contract] = difference
         return actionable
+
+    def _report_position_errors(
+        self,
+        errors: dict[ibi.Contract, float],
+        broker_positions: dict[ibi.Contract, float],
+    ) -> None:
+        """Expose quantities and recovery ownership for offline investigation."""
+        for contract, difference in errors.items():
+            broker_quantity = broker_positions.get(contract, 0.0)
+            roll = self.controller.book.rolls.for_contract(contract)
+            log.critical(
+                "Position mismatch: conId=%s symbol=%s Book=%s broker=%s "
+                "policy=%s sources=%s active_orders=%s roll=%s",
+                contract.conId,
+                contract.localSymbol or contract.symbol,
+                broker_quantity + difference,
+                broker_quantity,
+                self.controller.position_mismatch_policy,
+                {
+                    state.source_key: state.quantity
+                    for state in self.controller.book.positions.source_states_for_contract(
+                        contract
+                    )
+                },
+                [
+                    (info.orderId, info.role)
+                    for info in self.controller.book.orders.active(contract=contract)
+                ],
+                (roll.series_key, roll.stage) if roll is not None else None,
+            )
 
     def handle_error_positions(
         self,
@@ -300,6 +357,8 @@ class SyncCoordinator:
     ) -> None:
         """Correct recoverable Book positions and supersede stale targets."""
 
+        if self.controller.position_mismatch_policy != "correct":
+            raise PositionsOutOfSync("Automatic position correction is disabled")
         log.error("Will attempt to fix position records")
         for contract, diff in errors.items():
             states = self.controller.book.positions.source_states_for_contract(contract)

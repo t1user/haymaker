@@ -353,11 +353,30 @@ class LiveRuntime:
             # streamer starts; it needs actual Contract ticks, not fallbacks.
             await self.startup_jobs.init_data()
             controller_outcome = await self.context.controller.run()
-            if controller_outcome is SyncOutcome.ABORTED:
+            if controller_outcome is not SyncOutcome.OK:
                 return
-            await self.startup_jobs.run()
+            await self._run_strategy()
         finally:
             MarketDataTimeout._cancel_all()
+
+    async def _run_strategy(self) -> None:
+        """End strategy work when Controller permanently disables trading."""
+        strategy = asyncio.create_task(self.startup_jobs.run(), name="live-strategy")
+        disabled = asyncio.create_task(
+            self.context.controller.wait_for_trading_disabled(),
+            name="trading-disabled",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (strategy, disabled), return_when=asyncio.FIRST_COMPLETED
+            )
+            if strategy in done:
+                await strategy
+        finally:
+            for task in (strategy, disabled):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(strategy, disabled, return_exceptions=True)
 
     async def stop(self, reason: str) -> None:
         """Put the controller on hold while supervised work stops."""

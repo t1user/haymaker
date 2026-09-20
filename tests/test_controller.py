@@ -175,6 +175,22 @@ def test_from_mapping_rejects_non_mapping_startup(atom_runtime):
         )
 
 
+@pytest.mark.parametrize("policy", ["fail", "correct"])
+def test_position_mismatch_policy_from_mapping(atom_runtime, policy):
+    controller = Controller.from_mapping(
+        {"position_mismatch_policy": policy}, trader=FakeTrader()
+    )
+    assert controller.position_mismatch_policy == policy
+
+
+@pytest.mark.parametrize("policy", ["warn", "ignore", "", True, None])
+def test_invalid_position_mismatch_policy_is_rejected(atom_runtime, policy):
+    with pytest.raises(ControllerError, match="position_mismatch_policy"):
+        Controller.from_mapping(
+            {"position_mismatch_policy": policy}, trader=FakeTrader()
+        )
+
+
 def test_direct_construction_loads_controller_sync_options(atom_runtime):
     controller = Controller(
         Trader(atom_runtime.ib),
@@ -2188,9 +2204,7 @@ async def test_sync_back_reports_offline_partial_fill_for_open_order(
 
 
 @pytest.mark.asyncio
-async def test_sync_rejects_conflicting_fill_history(
-    controller, monkeypatch
-):
+async def test_sync_rejects_conflicting_fill_history(controller, monkeypatch):
     """A repeated execution identity cannot silently change accounted quantity."""
 
     target_contract = contract()
@@ -2332,6 +2346,7 @@ async def test_sync_coordinator_prunes_unmatched_local_order_and_retries(
 async def test_sync_coordinator_requests_restart_before_position_correction(
     controller, monkeypatch
 ):
+    controller.position_mismatch_policy = "correct"
     corrected = []
     controller.book.update_position(
         PositionState(
@@ -2362,6 +2377,7 @@ async def test_sync_coordinator_requests_restart_before_position_correction(
 async def test_sync_coordinator_allows_position_correction_after_restart(
     controller, monkeypatch
 ):
+    controller.position_mismatch_policy = "correct"
     corrected = []
     controller.book.update_position(
         PositionState(
@@ -2438,6 +2454,7 @@ async def test_sync_defers_position_correction_while_open_order_is_active(
 async def test_broker_flat_correction_supersedes_target_before_recovery(
     controller, monkeypatch
 ):
+    controller.position_mismatch_policy = "correct"
     old_target_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     controller.book.update_position(
         PositionState(
