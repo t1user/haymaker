@@ -113,6 +113,11 @@ The research package is intentionally separate from live execution. It works dir
   before comparison, and fails unexplained position mismatches by default.
   `position_mismatch_policy: correct` opts into inferred corrections, with
   supervisor-owned recovery before correction where required.
+  Whole sync cycles are serialized. Accounting callbacks remain active during
+  startup/reconnect, while roll discovery requires reconciled broker state.
+  Unknown active orders fail sync unless cancellation is configured; account
+  scope is restricted to one account/subaccount. Order reconstruction and
+  bracket policy objects expose explicit execution methods after construction.
   `Controller.execute_reset()` and `execute_emergency_reset()` delegate to
   `Reset` and `EmergencyReset` in `reset.py`, which own action sequencing and
   share liquidation-order construction. Controller owns registered broker

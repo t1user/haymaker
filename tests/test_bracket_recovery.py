@@ -1,5 +1,6 @@
 """Independent broker-boundary coverage for missed initial protection."""
 
+import asyncio
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -234,6 +235,46 @@ async def test_inadequate_stop_is_removed_and_episode_closed(
     assert replacement.positions() == []
     assert replacement.openTrades() == []
     assert fresh.book.positions.for_source("alpha").quantity == 0
+
+
+@pytest.mark.parametrize("completion", ["delayed", "fill", "timeout"])
+async def test_incompatible_exit_cancellation_boundary(
+    entry_path, restart_entry, monkeypatch, completion
+):
+    """Wait for broker cancellation, re-read fills, and never close on timeout."""
+    runtime, broker, _, _ = entry_path
+    await broker.fill(broker.submitted[0])
+    broker.submitted[1].order.totalQuantity = 1
+    broker.submitted[1].orderStatus.remaining = 1
+    fresh, replacement, controller, _ = restart_entry(runtime, broker)
+    controller.broker_request_timeout = 0.05
+    cancel = replacement.cancelOrder
+    callbacks = []
+
+    def delayed_cancel(order, **kwargs):
+        if completion == "timeout":
+            return None
+        if completion == "fill" and order is replacement.submitted[2].order:
+            callbacks.append(
+                asyncio.create_task(replacement.fill(replacement.submitted[2]))
+            )
+        else:
+            asyncio.get_running_loop().call_soon(cancel, order)
+        return None
+
+    monkeypatch.setattr(replacement, "cancelOrder", delayed_cancel)
+    outcome = await controller.run()
+    await asyncio.gather(*callbacks)
+    if completion == "fill":
+        assert outcome is SyncOutcome.OK
+        assert len(replacement.submitted) == 3
+        assert fresh.book.positions.for_source("alpha").quantity == 0
+    else:
+        assert outcome is SyncOutcome.FAILED
+        assert len(replacement.submitted) == (3 if completion == "timeout" else 4)
+        if completion == "delayed":
+            await replacement.fill(replacement.submitted[-1])
+            assert replacement.positions() == []
 
 
 @pytest.mark.parametrize(

@@ -165,6 +165,8 @@ class OrderInfo:
         )
         if self.source_key is not None:
             self.source_key = non_empty_string(self.source_key, "source_key")
+        if self.position_id is not None:
+            self.position_id = non_empty_string(self.position_id, "position_id")
         self.params = readonly_mapping(self.params, "params")
         self.fills = tuple(self.fills)
         self._applied_fill_keys.update(

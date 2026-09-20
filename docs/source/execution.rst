@@ -944,7 +944,8 @@ OCA group. Incompatible exits must first confirm cancellation within
 an independent close. Active entries, closes and rolls retain their sequencing.
 
 Only one account/subaccount is supported per process. Broker position comparison
-uses account and concrete conId, and rejects snapshots spanning accounts.
+uses account and concrete conId. Multiple managed accounts, snapshots or order
+records spanning accounts, and account changes across reconnects are rejected.
 Unknown active broker orders fail reconciliation when
 ``cancel_unknown_trades=False``; those orders remain untouched. Setting it to
 ``True`` permits cancellation followed by another reconciliation pass.
@@ -966,6 +967,13 @@ Broker request unavailability requests supervisor recovery even on the last
 local attempt. A disappeared partially filled order requires terminal broker
 history: partial execution evidence is accounted, but cannot prove cancellation
 of its remainder. Missing terminal evidence fails reconciliation explicitly.
+
+Submission metadata (role, model name, optional source/episode strings and
+params mapping) is validated before the broker is called, including emergency
+submissions. Invalid metadata cannot leave an accepted unregistered order.
+Health checks accept callable objects and partials as well as functions. One
+checker failure does not prevent later checks; repeated failure reports are
+suppressed until that checker succeeds, then reported if it fails again.
 
 ``controller.position_mismatch_policy`` applies during startup, reconnect and
 periodic synchronization:

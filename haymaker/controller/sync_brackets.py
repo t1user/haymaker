@@ -101,10 +101,11 @@ class BracketSync:
         return any(
             info.role == StandardOrderRole.STOP_LOSS
             and info.position_id == state.position_id
+            and info.execution_model_name == state.execution_model_name
             and info.trade.contract == state.contract
             and info.trade.order.action == ("SELL" if state.quantity > 0 else "BUY")
             and info.trade.order.orderType in {"STP", "STP LMT", "TRAIL", "FIX PEGGED"}
-            and info.trade.remaining() >= abs(state.quantity)
+            and info.trade.remaining() == abs(state.quantity)
             for info in brackets
         )
 
@@ -221,6 +222,11 @@ class RemoveBracketSyncAction(BracketSyncAction):
                     for trade in exits
                 )
                 or len(groups) > 1
+                or any(
+                    info.position_id != state.position_id
+                    or info.execution_model_name != state.execution_model_name
+                    for info in issue.existing_orders
+                )
             )
             if incompatible:
                 for trade in exits:

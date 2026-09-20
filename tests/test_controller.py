@@ -38,6 +38,90 @@ from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"execution_model_name": ""},
+        {"execution_model_name": 5},
+        {"role": ""},
+        {"role": None},
+        {"source_key": ""},
+        {"source_key": 5},
+        {"position_id": ""},
+        {"position_id": 5},
+        {"params": []},
+        {"params": [1]},
+    ],
+)
+def test_invalid_submission_metadata_never_reaches_broker(controller_runtime, metadata):
+    """Both ordinary and emergency registered submissions validate before sending."""
+    runtime, controller, trader = controller_runtime
+    options = {"role": "OPEN", "execution_model_name": "brackets", **metadata}
+    for submit in (controller.trade, controller._submit_registered_trade):
+        with pytest.raises((TypeError, ValueError)):
+            submit(contract(), ibi.MarketOrder("BUY", 1), **options)
+    assert trader.trades == []
+    assert runtime.book.orders.query() == ()
+
+
+def test_health_checks_isolate_callables_and_reset_after_recovery(controller, caplog):
+    """Partials, instances, duplicate names and exceptions report independently."""
+    healthy = False
+
+    class Checker:
+        __hash__ = None
+
+        def __call__(self):
+            return healthy
+
+    def raises():
+        raise RuntimeError("broken checker")
+
+    later = Mock(return_value=True)
+    checks = [
+        partial(bool, False),
+        Checker(),
+        lambda: healthy,
+        lambda: healthy,
+        raises,
+        later,
+    ]
+    for check in checks:
+        controller.set_health_check(check)
+    controller.run_health_check()
+    assert caplog.text.count("Health check failure for checker") == 5
+    assert "Health checker raised" in caplog.text
+    later.assert_called_once()
+    caplog.clear()
+    controller.run_health_check()
+    assert caplog.text == ""
+    healthy = True
+    controller.run_health_check()
+    healthy = False
+    controller.run_health_check()
+    assert caplog.text.count("Health check failure for checker") == 3
+
+
+def test_account_identity_cannot_change_across_reconnects(controller, monkeypatch):
+    monkeypatch.setattr(controller.ib, "managedAccounts", lambda: ["a"])
+    controller.verify_broker_account(())
+    controller.suspend_broker_work()
+    monkeypatch.setattr(controller.ib, "managedAccounts", lambda: ["b"])
+    with pytest.raises(SyncBrokenStateError, match="one account/subaccount"):
+        controller.verify_broker_account(())
+
+
+async def test_registered_unknown_order_still_prevents_startup(
+    controller, trade, monkeypatch
+):
+    """Retaining unknown fill evidence must not turn it into an owned live order."""
+    save_active_order(controller, trade, role=StandardOrderRole.UNKNOWN)
+    set_broker_state(controller, monkeypatch, open_trades=(trade,))
+    monkeypatch.setattr(controller.ib, "reqPositionsAsync", AsyncMock(return_value=[]))
+    with pytest.raises(SyncBrokenStateError, match="Unknown broker orders"):
+        await SyncCoordinator(controller).run()
+
+
 @pytest.mark.parametrize("failure", [asyncio.TimeoutError, RuntimeError])
 @pytest.mark.parametrize("attempts", [1, 3])
 async def test_final_request_failure_always_requests_supervisor(
@@ -125,6 +209,33 @@ async def test_missing_partial_order_requires_terminal_evidence(
     assert len(info.fills) == 1
     assert info.trade.isDone() == completed_history
     assert controller.ib.reqCompletedOrdersAsync.await_count == 1
+
+
+async def test_cancelled_session_trade_recovers_separate_execution_history(
+    controller, trade, monkeypatch
+):
+    """Session cancellation and execution history are independent evidence."""
+    trade.order.totalQuantity = 3
+    info = save_active_order(controller, trade)
+    execution = fill(trade)
+    terminal = deepcopy(trade)
+    terminal.orderStatus.status = ibi.OrderStatus.Cancelled
+    set_broker_state(
+        controller,
+        monkeypatch,
+        positions=(ibi.Position("test", trade.contract, 1, 100),),
+        trades=(terminal,),
+        fills=(execution,),
+    )
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(return_value=controller.ib.positions()),
+    )
+    assert not await SyncCoordinator(controller).run()
+    assert len(info.fills) == 1
+    assert info.trade.isDone()
+    assert controller.book.positions.quantity(trade.contract) == 1
 
 
 async def test_snapshot_compares_concrete_identity_and_rejects_multiple_accounts(

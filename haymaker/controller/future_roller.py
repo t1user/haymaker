@@ -202,7 +202,7 @@ class FutureRoller:
                 )
                 self.controller.suspend_broker_work()
                 self.controller.request_position_sync()
-                continue
+                return
             details = self.controller.contract_registry.get_details(new_contract)
             if details is not None and not details.is_open():
                 log.warning(

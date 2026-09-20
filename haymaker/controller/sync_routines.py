@@ -9,6 +9,7 @@ from typing import Self
 import ib_insync as ibi
 
 from haymaker.book import Book, FillRecord
+from haymaker.components.messages import StandardOrderRole
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,12 @@ class OrderSync:
                 self.recovered_fills.extend(
                     (trade, fill) for fill in self._unseen_fills(trade)
                 )
+                info = self.book.orders.by_id(trade.order.orderId)
+                if info is not None and info.role in {
+                    StandardOrderRole.UNKNOWN,
+                    StandardOrderRole.MANUAL,
+                }:
+                    self.unknown.append(trade)
         return self
 
     def _unseen_fills(self, trade: ibi.Trade) -> tuple[ibi.Fill, ...]:
@@ -103,6 +110,11 @@ class OrderSync:
             current = known.get(old_trade.order.permId)
             if current is not None:
                 current.order.orderId = old_trade.order.orderId
+                info = self.book.orders.by_id(old_trade.order.orderId)
+                if info is not None:
+                    current.fills = info.execution_trade(
+                        (*current.fills, *self._matching_broker_fills(current))
+                    ).fills
             else:
                 current = self._reconstruct_from_fills(old_trade)
             if current is None:
@@ -165,11 +177,11 @@ class OrderSync:
 
     @property
     def is_ok(self) -> bool:
-        return not any(self.lists)
+        return not (any(self.lists) or self.unresolved)
 
     @property
     def is_error(self) -> bool:
-        return bool(self.errors or self.unknown)
+        return bool(self.errors or self.unknown or self.unresolved)
 
 
 class PositionSync:

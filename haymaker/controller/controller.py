@@ -88,13 +88,16 @@ class Controller(Atom):
         default_factory=list
     )
     _broker_ready: bool = field(default=False, init=False, repr=False)
+    _broker_account: str | None = field(default=None, init=False, repr=False)
     _sync_timer: ev.Timer | None = field(default=None, repr=False)
     _health_check_timer: ev.Timer | None = field(default=None, repr=False)
     _order_loggers: OrderLoggers | None = field(default=None, repr=False)
     _health_check_functions: list[Callable[[], bool]] = field(
         default_factory=list, repr=False
     )
-    _health_check_triggers: list[str] = field(default_factory=list, repr=False)
+    _health_check_triggers: dict[int, Callable[[], bool]] = field(
+        default_factory=dict, repr=False
+    )
     _new_position_lock: bool = False
     _trading_disabled: bool = False
     _trading_disabled_event: asyncio.Event = field(
@@ -208,19 +211,33 @@ class Controller(Atom):
         return (state.contract,) if state is not None and state.contract else ()
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
+        """Register a health check; report each failure episode independently."""
+        if not callable(func):
+            raise TypeError("health check must be callable")
         self._health_check_functions.append(func)
 
     def set_sync_abort_event(self, event: asyncio.Event) -> None:
         self._sync_abort_event = event
 
     def run_health_check(self, *args: object) -> None:
+        """Isolate checker failures and reset suppression after a successful check."""
         for func in itertools.chain(
             itertools.chain(*self.health_check_observables),
             self._health_check_functions,
         ):
-            if not func() and func.__name__ not in self._health_check_triggers:
-                log.critical("Health check failure for checker: %s", func.__name__)
-                self._health_check_triggers.append(func.__name__)
+            identity = id(func)
+            label = getattr(func, "__name__", type(func).__name__)
+            try:
+                healthy = bool(func())
+            except Exception:
+                if identity not in self._health_check_triggers:
+                    log.exception("Health checker raised: %s", label)
+                healthy = False
+            if healthy:
+                self._health_check_triggers.pop(identity, None)
+            elif identity not in self._health_check_triggers:
+                log.critical("Health check failure for checker: %s", label)
+                self._health_check_triggers[identity] = func
 
     def verify_have_contracts_for_positions(self) -> list[ibi.Contract]:
         return [
@@ -232,6 +249,22 @@ class Controller(Atom):
     def suspend_broker_work(self) -> None:
         """Defer roll discovery until reconciliation completes again."""
         self._broker_ready = False
+
+    def verify_broker_account(self, positions: tuple[ibi.Position, ...]) -> None:
+        """Enforce the process's single account across reconnects and order history."""
+        accounts = set(self.ib.managedAccounts())
+        accounts.update(position.account for position in positions)
+        accounts.update(trade.order.account for trade in self.ib.openTrades())
+        accounts.update(info.trade.order.account for info in self.book.orders.query())
+        if self._broker_account is not None:
+            accounts.add(self._broker_account)
+        accounts.discard("")
+        if len(accounts) > 1:
+            raise SyncBrokenStateError(
+                f"Expected one account/subaccount, received {sorted(accounts)}"
+            )
+        if accounts:
+            self._broker_account = accounts.pop()
 
     @property
     def broker_ready(self) -> bool:
@@ -484,15 +517,35 @@ class Controller(Atom):
     ) -> ibi.Trade:
         """Submit and register an order after caller-specific policy checks."""
 
+        # Validate the same record schema used after submission before the
+        # broker can accept an order. Only the broker Trade is replaced later.
+        metadata = OrderInfo(
+            trade=ibi.Trade(contract=contract, order=order),
+            role=role,
+            submitted_at=datetime.datetime.now(datetime.timezone.utc),
+            execution_model_name=execution_model_name,
+            source_key=source_key,
+            position_id=position_id,
+            params={} if params is None else params,
+        )
+        self._validate_order_attribution(
+            role=metadata.role, source_key=metadata.source_key
+        )
+        if (
+            order.account
+            and self._broker_account
+            and order.account != self._broker_account
+        ):
+            raise ValueError("Order account differs from the reconciled account")
         self.book.check_writable()
         trade = self.trader.trade(contract, order)
         self.register_order(
             trade,
-            role=str(role),
-            execution_model_name=execution_model_name,
-            source_key=source_key,
-            position_id=position_id,
-            params=params,
+            role=metadata.role,
+            execution_model_name=metadata.execution_model_name,
+            source_key=metadata.source_key,
+            position_id=metadata.position_id,
+            params=metadata.params,
         )
         trade.filledEvent += partial(
             self.log_trade,
@@ -520,7 +573,7 @@ class Controller(Atom):
             execution_model_name=execution_model_name,
             source_key=source_key,
             position_id=position_id,
-            params=params or {},
+            params={} if params is None else params,
         )
         self.book.save_order(info)
         log.debug(
@@ -848,7 +901,8 @@ class Controller(Atom):
                 self.cancel(trade)
                 if not trade.isDone():
                     raise SyncBrokenStateError(
-                        f"Unsafe protective exit cancellation unconfirmed for {source_key!r}"
+                        "Unsafe protective exit cancellation unconfirmed for "
+                        f"{source_key!r}"
                     )
         groups = {
             (trade.order.ocaGroup, trade.order.ocaType)

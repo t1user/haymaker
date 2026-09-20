@@ -223,6 +223,21 @@ def apply_fill(book, trade: ibi.Trade, quantity: float, exec_id: str) -> None:
         trade.filledEvent.emit(trade)
 
 
+def test_cached_roll_mismatch_requests_reconciliation_without_blocking(book):
+    """A transient cache difference never becomes durable blocked discovery."""
+    old, active, next_ = future(1, "old"), future(2, "active"), future(3, "next")
+    persist_direct_position(book, old)
+    controller = make_controller(book, old, active, next_)
+    controller.trader.positions.clear()
+    roller = FutureRoller(controller)
+    roller.register_executor(FutureRollMode.DIRECT)
+    roller.roll()
+    assert controller.sync_requested
+    assert not controller.broker_ready
+    assert book.rolls.all() == ()
+    assert controller.trades == []
+
+
 def persist_direct_position(
     book,
     contract: ibi.Future,

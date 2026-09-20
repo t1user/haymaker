@@ -134,6 +134,8 @@ class SyncCoordinator:
             )
             return False
 
+        self.controller.verify_broker_account(position_snapshot.positions)
+
         try:
             order_sync = OrderSync(self.controller.ib, self.controller.book).run()
             if order_sync.unresolved:
@@ -144,9 +146,11 @@ class SyncCoordinator:
                     )
                 except Exception:
                     log.warning(
-                        "Completed-order history unavailable; terminal status remains unresolved"
+                        "Completed-order history unavailable; "
+                        "terminal status remains unresolved"
                     )
                     completed = []
+                    self.request_restart = True
                 order_sync.resolve_completed_trades(completed)
         except (TypeError, ValueError) as exc:
             raise SyncBrokenStateError(
@@ -160,6 +164,8 @@ class SyncCoordinator:
         if order_sync.done or order_sync.recovered_fills:
             await asyncio.sleep(0)
         await self.recover_commissions()
+        if self.request_restart:
+            return False
         if order_sync.unresolved:
             raise SyncBrokenStateError(
                 "Order terminal status unresolved after execution recovery: "
@@ -201,9 +207,8 @@ class SyncCoordinator:
             self.handle_error_trades(order_sync.errors)
             await asyncio.sleep(0)
         if order_sync.unknown:
-            if self.handle_unknown_trades(order_sync.unknown):
-                return False
-            return True
+            self.handle_unknown_trades(order_sync.unknown)
+            return False
         if order_sync.done or order_sync.errors:
             return False
 
@@ -236,20 +241,12 @@ class SyncCoordinator:
             raise SyncBrokenStateError(f"bracket sync failed: {exc}") from exc
         return True
 
-    def handle_unknown_trades(self, trades: list[ibi.Trade]) -> bool:
-        """Cancel unknown broker trades when configured and report if broker changed."""
+    def handle_unknown_trades(self, trades: list[ibi.Trade]) -> None:
+        """Cancel unknown broker trades after the configured policy permits it."""
         log.critical(f"Unknown broker orders during sync: {trades}.")
-        if not self.controller.cancel_unknown_trades:
-            log.critical(
-                "Unknown broker orders left active because "
-                "cancel_unknown_trades is False."
-            )
-            return False
-
         for trade in trades:
             log.debug(f"Cancelling unknown broker order: {trade.order.orderId}")
             self.controller.cancel(trade)
-        return True
 
     def handle_done_trades(self, trades: list[ibi.Trade]) -> None:
         """
@@ -269,16 +266,25 @@ class SyncCoordinator:
 
     async def recover_commissions(self) -> None:
         """Recover late per-execution reports for working and terminal records."""
+        by_perm_id = {
+            info.permId: info
+            for info in self.controller.book.orders.query()
+            if info.permId
+        }
         for fill in self.controller.ib.fills():
             report = fill.commissionReport
             if not report.execId:
                 continue
-            info = self.controller.book.orders.by_perm_id(fill.execution.permId)
+            info = by_perm_id.get(fill.execution.permId)
             if info is None:
                 candidate = self.controller.book.orders.by_id(fill.execution.orderId)
                 if (
                     candidate is not None
                     and candidate.trade.order.clientId == fill.execution.clientId
+                    and (
+                        not fill.execution.permId
+                        or candidate.permId in {0, fill.execution.permId}
+                    )
                 ):
                     info = candidate
             if info is None:
@@ -369,6 +375,7 @@ class SyncCoordinator:
         for contract, difference in errors.items():
             broker_quantity = broker_positions.get(contract, 0.0)
             roll = self.controller.book.rolls.for_contract(contract)
+            states = self.controller.book.positions.source_states_for_contract(contract)
             log.critical(
                 "Position mismatch: conId=%s symbol=%s Book=%s broker=%s "
                 "policy=%s sources=%s active_orders=%s roll=%s",
@@ -377,12 +384,7 @@ class SyncCoordinator:
                 broker_quantity + difference,
                 broker_quantity,
                 self.controller.position_mismatch_policy,
-                {
-                    state.source_key: state.quantity
-                    for state in self.controller.book.positions.source_states_for_contract(
-                        contract
-                    )
-                },
+                {state.source_key: state.quantity for state in states},
                 [
                     (info.orderId, info.role)
                     for info in self.controller.book.orders.active(contract=contract)
