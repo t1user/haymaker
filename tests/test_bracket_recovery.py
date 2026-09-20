@@ -195,11 +195,13 @@ async def test_partial_entry_recovers_binding_but_not_brackets(
     await broker.fill(broker.submitted[0], 1, notify_events=False)
     # Its live open Trade carries the offline partial execution on reconnect.
     fresh, replacement, controller, model = restart_entry(runtime, broker)
-    # Controller normally receives this execution during broker connection.
     trade = replacement.submitted[0]
-    controller.release_hold()
-    await controller.onExecDetailsEvent(trade, trade.fills[0])
     assert await controller.run() is SyncOutcome.OK
+    assert fresh.book.positions.for_source("alpha").quantity == 1
+    assert len(fresh.book.orders.by_id(1).fills) == 1
+    assert await controller.sync() is SyncOutcome.OK
+    assert fresh.book.positions.for_source("alpha").quantity == 1
+    assert len(fresh.book.orders.by_id(1).fills) == 1
     model.recover()
     assert len(replacement.submitted) == 1
     await replacement.fill(trade)

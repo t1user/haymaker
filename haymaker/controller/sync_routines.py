@@ -8,7 +8,7 @@ from typing import Self
 
 import ib_insync as ibi
 
-from haymaker.book import Book
+from haymaker.book import Book, FillRecord
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ class OrderSync:
         self.inactive: list[ibi.Trade] = []
         self.done: list[ibi.Trade] = []
         self.errors: list[ibi.Trade] = []
+        self.recovered_fills: list[tuple[ibi.Trade, ibi.Fill]] = []
         self.update_trades().review_trades().handle_inactive_trades().report()
 
     @property
@@ -35,7 +36,45 @@ class OrderSync:
         for trade in self.ib.openTrades():
             if unknown := self.book.rebind_trade(trade):
                 self.unknown.append(unknown)
+            else:
+                self.recovered_fills.extend(
+                    (trade, fill) for fill in self._unseen_fills(trade)
+                )
         return self
+
+    def _unseen_fills(self, trade: ibi.Trade) -> tuple[ibi.Fill, ...]:
+        """Return validated broker executions not yet normalized by Book."""
+
+        info = self.book.orders.by_id(
+            trade.order.orderId
+        ) or self.book.orders.by_perm_id(trade.order.permId)
+        if info is None:
+            raise ValueError("Rebound broker Trade has no Book order record")
+        merged = info.execution_trade(
+            (*trade.fills, *self._matching_broker_fills(trade))
+        )
+        received = {record.deduplication_key for record in info.fills}
+        return tuple(
+            fill
+            for fill in merged.fills
+            if FillRecord.from_fill(trade, fill).deduplication_key not in received
+        )
+
+    def _matching_broker_fills(self, trade: ibi.Trade) -> tuple[ibi.Fill, ...]:
+        """Return execution-history fills attributable to one broker Trade."""
+
+        return tuple(
+            fill
+            for fill in self.ib.fills()
+            if (
+                fill.execution.permId == trade.order.permId
+                if trade.order.permId
+                else (
+                    fill.execution.orderId == trade.order.orderId
+                    and fill.execution.clientId == trade.order.clientId
+                )
+            )
+        )
 
     def review_trades(self) -> Self:
         """Find Book-active trades no longer present in broker openTrades."""
@@ -72,27 +111,17 @@ class OrderSync:
         info = self.book.orders.by_id(trade.order.orderId)
         if info is None:
             return None
-        fills = [
-            fill
-            for fill in self.ib.fills()
-            if (
-                fill.execution.permId == trade.order.permId
-                if trade.order.permId
-                else (
-                    fill.execution.orderId == trade.order.orderId
-                    and fill.execution.clientId == trade.order.clientId
-                )
-            )
-        ]
+        fills = list(self._matching_broker_fills(trade))
         if not fills and not info.fills:
             return None
         return info.execution_trade(fills)
 
     def report(self) -> Self:
-        if any(self.lists):
+        if self.recovered_fills or any(self.lists):
             log.debug(
-                "Order sync: unknown=%s done=%s unmatched=%s",
+                "Order sync: unknown=%s recovered_fills=%s done=%s unmatched=%s",
                 len(self.unknown),
+                len(self.recovered_fills),
                 len(self.done),
                 len(self.errors),
             )

@@ -1994,6 +1994,8 @@ async def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
     assert not result
     assert cancelled == [trade]
     assert not controller._trading_disabled
+    assert controller.book.orders.by_id(trade.order.orderId) is None
+    assert controller.book.positions.quantity(trade.contract) == 0
 
 
 @pytest.mark.asyncio
@@ -2084,6 +2086,168 @@ async def test_open_trade_refresh_does_not_skip_bracket_sync(
     assert result
     assert info.trade is broker_trade
     assert reconciled == [(controller.missing_brackets, controller)]
+
+
+@pytest.mark.parametrize(
+    ("role", "initial_quantity", "broker_quantity", "source_key"),
+    [
+        (StandardOrderRole.OPEN, 0, 1, "alpha"),
+        (StandardOrderRole.CLOSE, 3, 2, "alpha"),
+        (StandardOrderRole.TARGET_ADJUSTMENT, 0, 1, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_sync_back_reports_offline_partial_fill_for_open_order(
+    controller,
+    monkeypatch,
+    role,
+    initial_quantity,
+    broker_quantity,
+    source_key,
+):
+    """Reconnect accounts partial executions before comparing positions."""
+
+    target_contract = contract()
+    if source_key is not None:
+        controller.book.update_position(
+            PositionState(
+                source_key=source_key,
+                execution_model_name="brackets",
+                contract=target_contract,
+                quantity=initial_quantity,
+                target_quantity=3 if role == StandardOrderRole.OPEN else 0,
+                target_created_at=datetime.now(timezone.utc),
+                position_id="episode",
+            )
+        )
+    action = "SELL" if role == StandardOrderRole.CLOSE else "BUY"
+    saved_trade = ibi.Trade(
+        contract=target_contract,
+        order=ibi.MarketOrder(
+            action,
+            3,
+            orderId=77,
+            permId=177,
+        ),
+        orderStatus=ibi.OrderStatus(
+            orderId=77,
+            status=ibi.OrderStatus.Submitted,
+            remaining=3,
+        ),
+    )
+    info = controller.register_order(
+        saved_trade,
+        role=role,
+        execution_model_name="brackets" if source_key is not None else "serial",
+        source_key=source_key,
+        position_id="episode" if source_key is not None else None,
+    )
+    broker_trade = deepcopy(saved_trade)
+    offline_fill = fill(broker_trade, exec_id=f"{role}-offline", quantity=1)
+    broker_trade.fills.append(offline_fill)
+    broker_trade.orderStatus.filled = 1
+    broker_trade.orderStatus.remaining = 2
+    broker_position = ibi.Position(
+        account="DU123",
+        contract=target_contract,
+        position=broker_quantity,
+        avgCost=100,
+    )
+    set_broker_state(
+        controller,
+        monkeypatch,
+        positions=(broker_position,),
+        open_trades=(broker_trade,),
+        fills=(offline_fill,),
+    )
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(return_value=[broker_position]),
+    )
+
+    assert await SyncCoordinator(controller).run()
+    assert info.trade is broker_trade
+    assert len(info.fills) == 1
+    assert controller.book.positions.quantity(target_contract) == broker_quantity
+
+    assert await SyncCoordinator(controller).run()
+    assert len(info.fills) == 1
+    assert controller.book.positions.quantity(target_contract) == broker_quantity
+
+    live_fill = fill(broker_trade, exec_id=f"{role}-live", quantity=2)
+    broker_trade.fills.append(live_fill)
+    broker_trade.orderStatus.status = ibi.OrderStatus.Filled
+    broker_trade.orderStatus.filled = 3
+    broker_trade.orderStatus.remaining = 0
+    await controller.onExecDetailsEvent(broker_trade, live_fill)
+    assert len(info.fills) == 2
+    assert controller.book.positions.quantity(target_contract) == (
+        0 if role == StandardOrderRole.CLOSE else 3
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_rejects_conflicting_fill_history(
+    controller, monkeypatch
+):
+    """A repeated execution identity cannot silently change accounted quantity."""
+
+    target_contract = contract()
+    controller.book.update_position(
+        PositionState(
+            source_key="alpha",
+            execution_model_name="brackets",
+            contract=target_contract,
+            position_id="episode",
+        )
+    )
+    saved_trade = ibi.Trade(
+        contract=target_contract,
+        order=ibi.MarketOrder("BUY", 3, orderId=77, permId=177),
+        orderStatus=ibi.OrderStatus(
+            orderId=77,
+            status=ibi.OrderStatus.Submitted,
+            remaining=3,
+        ),
+    )
+    controller.register_order(
+        saved_trade,
+        role=StandardOrderRole.OPEN,
+        execution_model_name="brackets",
+        source_key="alpha",
+        position_id="episode",
+    )
+    await controller.onExecDetailsEvent(
+        saved_trade,
+        fill(saved_trade, exec_id="offline-1", quantity=1),
+    )
+    broker_trade = deepcopy(saved_trade)
+    conflicting = fill(broker_trade, exec_id="offline-1", quantity=2)
+    broker_trade.fills.append(conflicting)
+    broker_trade.orderStatus.filled = 2
+    broker_trade.orderStatus.remaining = 1
+    broker_position = ibi.Position(
+        account="DU123",
+        contract=target_contract,
+        position=2,
+        avgCost=100,
+    )
+    set_broker_state(
+        controller,
+        monkeypatch,
+        positions=(broker_position,),
+        open_trades=(broker_trade,),
+        fills=(conflicting,),
+    )
+    monkeypatch.setattr(
+        controller.ib,
+        "reqPositionsAsync",
+        AsyncMock(return_value=[broker_position]),
+    )
+
+    with pytest.raises(SyncBrokenStateError, match="execution evidence"):
+        await SyncCoordinator(controller).run()
 
 
 @pytest.mark.asyncio

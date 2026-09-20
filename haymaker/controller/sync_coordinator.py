@@ -10,7 +10,8 @@ After broker validation, each step reads current Book and order state while
 retaining that one broker-position snapshot. The ordered flow is:
 
 1. Relink broker ``ibi.Trade`` objects to local order records and back-report
-   fills for orders that completed while the process was disconnected.
+   fills for known orders that executed while the process was disconnected,
+   whether they remain working or completed.
 2. Compare local aggregate logical Book positions with the fresh broker
    snapshot, deferring Contracts with active OPEN/CLOSE work.
 3. Correct local position records when the existing recovery rules allow it,
@@ -143,6 +144,9 @@ class SyncCoordinator:
         self.controller.release_hold()
         if order_sync.done:
             self.handle_done_trades(order_sync.done)
+        if order_sync.recovered_fills:
+            self.handle_recovered_fills(order_sync.recovered_fills)
+        if order_sync.done or order_sync.recovered_fills:
             await asyncio.sleep(0)
 
         try:
@@ -231,6 +235,19 @@ class SyncCoordinator:
                 self.controller.ib.commissionReportEvent.emit(
                     trade, trade.fills[-1], trade.fills[-1].commissionReport
                 )
+
+    def handle_recovered_fills(
+        self, executions: list[tuple[ibi.Trade, ibi.Fill]]
+    ) -> None:
+        """Back-report unseen executions for known still-working broker orders."""
+
+        for trade, fill in executions:
+            log.debug(
+                "Back-reporting fill execId=%s orderId=%s for active trade",
+                fill.execution.execId,
+                trade.order.orderId,
+            )
+            self.controller.ib.execDetailsEvent.emit(trade, fill)
 
     def handle_error_trades(self, trades: list[ibi.Trade]) -> None:
         """
