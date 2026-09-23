@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from runpy import run_path
 
@@ -327,6 +328,9 @@ class FakeDatabase:
     def __setitem__(self, name, collection):
         self.collections[name] = collection
 
+    def list_collection_names(self):
+        return list(self.collections)
+
 
 class FakeClient:
     def __init__(self):
@@ -349,6 +353,29 @@ def migration_client():
                 "params": {"position_id": "episode"},
             }
         ]
+    )
+    stop = legacy_trade()
+    stop.order.orderId = 8
+    stop.order.permId = 100
+    stop.order.action = "SELL"
+    stop.order.orderType = "STP"
+    stop.order.auxPrice = 95
+    stop.order.ocaGroup = "episode-brackets"
+    stop.order.ocaType = 2
+    stop.orderStatus = ibi.OrderStatus(orderId=8, status="Submitted", remaining=1)
+    stop.fills = []
+    client["legacy"]["orders"].documents.append(
+        {
+            "_id": "stop",
+            "strategy": "alpha",
+            "action": "STOP-LOSS",
+            "trade": tree(stop),
+            "params": {
+                "position_id": "episode",
+                "vol_field_name": "atr",
+                "vol_field_value": 5,
+            },
+        }
     )
     client["legacy"]["strategies"] = FakeCollection(
         [
@@ -395,7 +422,7 @@ def test_migration_defaults_to_non_mutating_dry_run():
 
     assert report["mode"] == "dry-run"
     assert report["source_counts"] == {
-        "orders": 1,
+        "orders": 2,
         "strategy_snapshots": 1,
         "state": 0,
         "blotter": 1,
@@ -415,16 +442,18 @@ def test_migration_apply_is_idempotent_and_reports_target_counts():
         source_database="legacy",
         target_database="fresh",
         apply=True,
+        source_stopped=True,
     )
     second = migrate(
         client,
         source_database="legacy",
         target_database="fresh",
         apply=True,
+        source_stopped=True,
     )
 
     assert first["target_counts"] == {
-        "orders": 1,
+        "orders": 2,
         "state": 1,
         "blotter": 1,
     }
@@ -552,8 +581,20 @@ def test_component_conversion_apply_is_idempotent_and_source_is_unchanged():
     original = deepcopy((orders, states))
     client["old"]["orders"] = FakeCollection(orders)
     client["old"]["state"] = FakeCollection(states)
-    first = migrate(client, source_database="old", target_database="fresh", apply=True)
-    second = migrate(client, source_database="old", target_database="fresh", apply=True)
+    first = migrate(
+        client,
+        source_database="old",
+        target_database="fresh",
+        apply=True,
+        source_stopped=True,
+    )
+    second = migrate(
+        client,
+        source_database="old",
+        target_database="fresh",
+        apply=True,
+        source_stopped=True,
+    )
     assert (
         first["target_counts"]
         == second["target_counts"]
@@ -569,6 +610,435 @@ def test_pending_roll_schema_change_is_refused_before_writes():
         [{"state_type": "roll", "stage": "ROLL_ORDER_ACTIVE"}]
     )
     with pytest.raises(ValueError, match="Finish pending roll"):
-        migrate(client, source_database="old", target_database="fresh", apply=True)
+        migrate(
+            client,
+            source_database="old",
+            target_database="fresh",
+            apply=True,
+            source_stopped=True,
+        )
     assert client["fresh"]["orders"].documents == []
     assert client["fresh"]["state"].documents == []
+
+
+def test_models_collection_copy_preserves_source_and_restores_existing_protection(
+    atom_runtime_factory, order_saver, state_saver, monkeypatch
+):
+    """A protected position survives conversion and processes its next real fill."""
+    from haymaker.components import BracketExecutionModel, TrailingStop
+    from haymaker.controller import Controller
+
+    client = migration_client()
+    client["legacy"]["models"] = client["legacy"]["strategies"]
+    del client["legacy"].collections["strategies"]
+    snapshot = client["legacy"]["models"].documents[0]
+    snapshot["alpha"]["params"] = {"open": {"range": 17, "position_id": "episode"}}
+    snapshot["locked"] = {"position": 0, "lock": -1, "timestamp": snapshot["timestamp"]}
+    original = deepcopy(
+        {name: col.documents for name, col in client["legacy"].collections.items()}
+    )
+    report = migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+        strategy_collection="models",
+        source_stopped=True,
+        apply=True,
+    )
+    assert report["target_verified"] is True
+    assert report["book_restoration"]["positions_by_con_id"] == {"1": 1}
+    assert {
+        name: col.documents
+        for name, col in client["legacy"].collections.items()
+        if col.documents
+    } == original
+    for document in client["fresh"]["orders"].documents:
+        order_saver.save(document)
+    for document in client["fresh"]["state"].documents:
+        state_saver.save(document)
+        assert document["source_collection"] == "models"
+    book = Book(
+        order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
+    )
+    runtime = atom_runtime_factory(book_=book)
+    runtime.bind_controller(Controller(trader=runtime.trader))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Recovery must preserve the existing broker orders")
+
+    monkeypatch.setattr(runtime.ib, "placeOrder", forbidden)
+    monkeypatch.setattr(runtime.ib, "cancelOrder", forbidden)
+    model = BracketExecutionModel(
+        "alpha", name="legacy:alpha", stop=TrailingStop(1, vol_field="range")
+    )
+    model.recover()
+    assert book.positions.for_source("alpha").bracket_inputs["range"] == 17
+    assert book.positions.blocked_direction("locked") == -1
+    assert not book.apply_fill(book.orders.by_id(7).trade, legacy_trade().fills[0])
+    stop = book.orders.by_id(8).trade
+    stop.orderStatus.status = ibi.OrderStatus.Filled
+    stop.orderStatus.filled = 1
+    stop.orderStatus.remaining = 0
+    fill = ibi.Fill(
+        stop.contract,
+        ibi.Execution(
+            execId="after-cutover",
+            orderId=8,
+            permId=100,
+            side="SLD",
+            shares=1,
+            price=95,
+            time=snapshot["timestamp"] + timedelta(seconds=10),
+        ),
+        ibi.CommissionReport(),
+        snapshot["timestamp"] + timedelta(seconds=10),
+    )
+    stop.fills.append(fill)
+    assert book.apply_fill(stop, fill)
+    assert book.positions.quantity(stop.contract) == 0
+    assert book.positions.blocked_direction("alpha") == 1
+    assert not book.apply_fill(stop, fill)
+    recovered = Book(
+        order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
+    )
+    assert recovered.positions.quantity(stop.contract) == 0
+    assert recovered.positions.blocked_direction("alpha") == 1
+
+
+def test_missing_models_selection_refuses_before_writes():
+    client = migration_client()
+    client["legacy"]["models"] = client["legacy"]["strategies"]
+    del client["legacy"].collections["strategies"]
+    with pytest.raises(ValueError, match="strategy-collection"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == []
+
+
+def test_legacy_accounted_keys_survive_missing_trade_fill_history(
+    order_saver, state_saver
+):
+    """Rebound legacy Trades can omit fills that the snapshot already includes."""
+    client = migration_client()
+    client["legacy"]["orders"].documents[0]["accounted_exec_ids"] = [
+        "exec-1",
+        "older-fill",
+    ]
+    migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+        source_stopped=True,
+        apply=True,
+    )
+    for document in client["fresh"]["orders"].documents:
+        order_saver.save(document)
+    for document in client["fresh"]["state"].documents:
+        state_saver.save(document)
+    book = Book(
+        order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
+    )
+    old_fill = deepcopy(legacy_trade().fills[0])
+    old_fill.execution.execId = "older-fill"
+    old_fill.commissionReport.execId = "older-fill"
+    assert book.apply_fill(book.orders.by_id(7).trade, old_fill)
+    assert len(book.orders.by_id(7).fills) == 2
+    assert book.positions.quantity(old_fill.contract) == 1
+    restored = Book(
+        order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
+    )
+    assert restored.positions.quantity(old_fill.contract) == 1
+
+
+def test_apply_requires_explicit_stopped_source_and_distinct_databases():
+    client = migration_client()
+    with pytest.raises(ValueError, match="source-stopped"):
+        migrate(client, source_database="legacy", target_database="fresh", apply=True)
+    with pytest.raises(ValueError, match="must be different"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="legacy",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == []
+
+
+@pytest.mark.parametrize(
+    "role", ["OPEN", "CLOSE", "FUTURE-ROLL", "MANUAL", "TARGET_ADJUSTMENT"]
+)
+def test_legacy_pending_work_is_refused_before_writes(role):
+    client = migration_client()
+    client["legacy"]["orders"].documents[1]["action"] = role
+    with pytest.raises(ValueError, match="Finish pending"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == []
+
+
+@pytest.mark.parametrize("stale", ["newer_fill", "unaccounted_fill"])
+def test_inconsistent_snapshot_cannot_hide_a_fill(stale):
+    client = migration_client()
+    if stale == "newer_fill":
+        client["legacy"]["strategies"].documents[0]["timestamp"] -= timedelta(seconds=1)
+    else:
+        client["legacy"]["orders"].documents[0]["accounted_exec_ids"] = []
+    with pytest.raises(ValueError, match="newer than|unaccounted legacy fill"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == []
+
+
+def test_corrected_snapshot_remains_authoritative_over_historical_fills():
+    client = migration_client()
+    client["legacy"]["orders"].documents[0]["accounted_exec_ids"] = ["exec-1"]
+    snapshot = client["legacy"]["strategies"].documents[0]
+    snapshot["alpha"]["position"] = 0
+    snapshot["alpha"]["lock"] = 1
+    stop = decode_tree(client["legacy"]["orders"].documents[1]["trade"])
+    stop.orderStatus.status = ibi.OrderStatus.Cancelled
+    client["legacy"]["orders"].documents[1]["trade"] = tree(stop)
+    report = migrate(client, source_database="legacy", target_database="fresh")
+    state = report["book_restoration"]["sources"]["alpha"]
+    assert state["quantity"] == 0
+    assert state["target_quantity"] == 0
+    assert state["blocked_direction"] == 1
+
+
+@pytest.mark.parametrize("collision", ["orderId", "permId", "fill"])
+def test_duplicate_identities_do_not_overwrite_evidence(collision):
+    client = migration_client()
+    duplicate = deepcopy(client["legacy"]["orders"].documents[0])
+    duplicate["_id"] = "another-order"
+    trade = decode_tree(duplicate["trade"])
+    if collision != "orderId":
+        trade.order.orderId = 90
+    if collision != "permId":
+        trade.order.permId = 900
+    if collision != "fill":
+        trade.fills[0].execution.execId = "another-fill"
+    duplicate["trade"] = tree(trade)
+    client["legacy"]["orders"].documents.append(duplicate)
+    with pytest.raises(ValueError, match="Duplicate|Ambiguous broker"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == []
+
+
+@pytest.mark.parametrize("problem", ["absent", "quantity", "episode", "active_flag"])
+def test_inconsistent_protection_is_refused(problem):
+    client = migration_client()
+    document = client["legacy"]["orders"].documents[1]
+    trade = decode_tree(document["trade"])
+    if problem == "absent":
+        trade.orderStatus.status = ibi.OrderStatus.Cancelled
+    elif problem == "quantity":
+        trade.order.totalQuantity = 2
+    elif problem == "episode":
+        document["params"]["position_id"] = "wrong-episode"
+    else:
+        document["active"] = False
+    document["trade"] = tree(trade)
+    with pytest.raises(ValueError, match="active stop|disagrees"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == []
+
+
+@pytest.mark.parametrize("evidence", ["fills", "accounting_keys"])
+def test_missing_source_cannot_resurrect_historical_positions(evidence):
+    client = migration_client()
+    if evidence == "accounting_keys":
+        document = client["legacy"]["orders"].documents[0]
+        trade = decode_tree(document["trade"])
+        trade.fills = []
+        document["trade"] = tree(trade)
+        document["accounted_exec_ids"] = ["exec-1"]
+        client["legacy"]["orders"].documents.pop()
+    del client["legacy"]["strategies"].documents[0]["alpha"]
+    with pytest.raises(ValueError, match="Missing legacy snapshot source"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+
+
+def test_source_changes_during_conversion_are_refused(monkeypatch):
+    client = migration_client()
+    collection = client["legacy"]["orders"]
+    original_find = collection.find
+    calls = 0
+
+    def changing_find(query):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            collection.documents[0]["priority"] = 100
+        return original_find(query)
+
+    monkeypatch.setattr(collection, "find", changing_find)
+    with pytest.raises(RuntimeError, match="Source changed"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == []
+
+
+def test_changed_source_cannot_overwrite_previous_conversion():
+    client = migration_client()
+    migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+        source_stopped=True,
+        apply=True,
+    )
+    before = deepcopy(client["fresh"]["orders"].documents)
+    client["legacy"]["orders"].documents[0]["priority"] = 100
+    with pytest.raises(RuntimeError, match="changed-source"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert client["fresh"]["orders"].documents == before
+
+
+def test_foreign_target_collection_is_refused():
+    client = migration_client()
+    client["fresh"]["foreign"] = FakeCollection([{"value": 1}])
+    with pytest.raises(RuntimeError, match="foreign collections"):
+        migrate(client, source_database="legacy", target_database="fresh")
+
+
+def test_target_readback_catches_missing_writes(monkeypatch):
+    client = migration_client()
+    monkeypatch.setattr(
+        client["fresh"]["orders"], "replace_one", lambda *args, **kwargs: None
+    )
+    with pytest.raises(RuntimeError, match="complete conversion plan"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+
+
+def test_interrupted_target_can_resume_identical_source(monkeypatch):
+    client = migration_client()
+    original = client["fresh"]["state"].replace_one
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("interrupted write")
+
+    monkeypatch.setattr(client["fresh"]["state"], "replace_one", fail)
+    with pytest.raises(RuntimeError, match="interrupted write"):
+        migrate(
+            client,
+            source_database="legacy",
+            target_database="fresh",
+            source_stopped=True,
+            apply=True,
+        )
+    assert len(client["fresh"]["orders"].documents) == 2
+    monkeypatch.setattr(client["fresh"]["state"], "replace_one", original)
+    report = migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+        source_stopped=True,
+        apply=True,
+    )
+    assert report["target_verified"]
+    assert report["target_counts"] == {"orders": 2, "state": 1, "blotter": 1}
+
+
+def test_migration_indexes_allow_subsequent_runtime_writes():
+    """Sparse provenance indexes must allow multiple ordinary runtime records."""
+    import mongomock
+    from haymaker.saver import MongoSaver
+
+    fixture = migration_client()
+    client = mongomock.MongoClient(tz_aware=True)
+    for name, collection in fixture["legacy"].collections.items():
+        client["legacy"][name].insert_many(deepcopy(collection.documents))
+    source_before = {
+        name: list(client["legacy"][name].find())
+        for name in client["legacy"].list_collection_names()
+    }
+    migrate(
+        client,
+        source_database="legacy",
+        target_database="fresh",
+        source_stopped=True,
+        apply=True,
+    )
+    book = Book(
+        order_saver=MongoSaver(
+            "orders",
+            client=client,
+            database="fresh",
+            query_key="orderId",
+            tz_aware=True,
+        ),
+        state_saver=MongoSaver(
+            "state",
+            client=client,
+            database="fresh",
+            query_key="state_key",
+            tz_aware=True,
+        ),
+        restore=True,
+        save_async=False,
+    )
+    for source in ("new-a", "new-b"):
+        book.update_position(
+            PositionState(source_key=source, execution_model_name="new")
+        )
+    for order_id in (20, 21):
+        client["fresh"]["orders"].insert_one({"orderId": order_id})
+        client["fresh"]["blotter"].insert_one({"order_id": order_id})
+    assert client["fresh"]["state"].count_documents({}) == 4
+    assert {
+        name: list(client["legacy"][name].find())
+        for name in client["legacy"].list_collection_names()
+    } == source_before
+    with pytest.raises(RuntimeError, match="runtime-written"):
+        migrate(client, source_database="legacy", target_database="fresh")

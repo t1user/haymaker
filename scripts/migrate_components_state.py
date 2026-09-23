@@ -8,16 +8,20 @@ target database names and never modifies the source database.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
 import ib_insync as ibi
+from bson import json_util  # type: ignore
 from pymongo import MongoClient  # type: ignore
 
 from haymaker.book import (
+    Book,
     ContractPosition,
     FillRecord,
     OrderInfo,
@@ -26,8 +30,14 @@ from haymaker.book import (
     RollState,
 )
 from haymaker.misc import decode_tree, tree
+from haymaker.saver import AbstractBaseSaver
 
-MIGRATION_VERSION = "components-book-v4-fill-checkpoints"
+MIGRATION_VERSION = "components-book-v5-settled-cutover"
+COLLECTION_IDENTITIES = {
+    "orders": "orderId",
+    "state": "state_key",
+    "blotter": "migration_key",
+}
 
 KNOWN_ROLES = {
     "OPEN": "OPEN",
@@ -118,9 +128,10 @@ def _legacy_bracket_inputs(params: Mapping[str, Any]) -> dict[str, Any]:
 
     opening = params.get("open")
     if isinstance(opening, Mapping):
-        for name in ("atr", "sl_points", "min_tick"):
-            if name in opening:
-                inputs.setdefault(name, opening[name])
+        # Custom legs choose their own field (for example DualThrust's range).
+        # Keep the original opening inputs; an installed bracket memo wins.
+        for name, value in opening.items():
+            inputs.setdefault(name, value)
 
     for name in ("atr", "sl_points", "min_tick"):
         if name in params:
@@ -153,7 +164,10 @@ def convert_order(
     if not isinstance(trade, ibi.Trade):
         raise TypeError("legacy order trade did not decode to ib_insync.Trade")
     if not trade.order.orderId:
-        raise ValueError("legacy order with orderId 0 cannot use natural identity")
+        raise ValueError(
+            "Legacy order with orderId 0 cannot use Book's natural identity; "
+            "reconcile its real broker orderId by permId before conversion"
+        )
     source_key = str(document.get("strategy") or "UNKNOWN")
     action = str(document.get("action") or "UNKNOWN")
     role = order_role(action)
@@ -167,7 +181,16 @@ def convert_order(
     )
     params = dict(document.get("params") or {})
     params.setdefault("legacy_action", action)
-    return {
+    if role == "ROLL":
+        for old_name, new_name in (("old", "old_contract"), ("new", "new_contract")):
+            if old_name in params:
+                params.setdefault(new_name, params[old_name])
+    if "active" in document and bool(document["active"]) != trade.isActive():
+        raise ValueError(
+            f"orderId={trade.order.orderId} active flag disagrees with Trade status; "
+            "reconcile the source instead of inventing a broker status"
+        )
+    result = {
         "orderId": trade.order.orderId,
         "clientId": trade.order.clientId,
         "permId": trade.order.permId,
@@ -184,6 +207,10 @@ def convert_order(
         "priority": document.get("priority", 0),
         **migration,
     }
+    if "accounted_exec_ids" in document:
+        result["legacy_accounted_exec_ids"] = list(document["accounted_exec_ids"])
+    OrderInfo.decode(result)
+    return result
 
 
 def convert_latest_strategy_snapshot(
@@ -191,6 +218,7 @@ def convert_latest_strategy_snapshot(
     *,
     source_database: str,
     orders: Sequence[Mapping[str, Any]] = (),
+    source_collection: str = "strategies",
 ) -> list[dict[str, Any]]:
     """Convert useful latest strategy state and skip historical snapshots."""
 
@@ -201,7 +229,7 @@ def convert_latest_strategy_snapshot(
             continue
         state = decode_tree(raw_state)
         if not isinstance(state, Mapping):
-            continue
+            raise ValueError(f"Invalid legacy strategy snapshot for {source_key!r}")
         contract = state.get("active_contract")
         quantity = float(state.get("position", 0.0))
         lock = state.get("lock")
@@ -210,7 +238,7 @@ def convert_latest_strategy_snapshot(
         bracket_inputs = _legacy_bracket_inputs(params)
         migration = provenance(
             source_database=source_database,
-            source_collection="strategies",
+            source_collection=source_collection,
             source_id=f"{snapshot_id}:{source_key}",
         )
         snapshot_time = _legacy_timestamp(
@@ -234,7 +262,13 @@ def convert_latest_strategy_snapshot(
                 "blocked_direction": blocked_direction,
                 "bracket_inputs": tree(bracket_inputs),
                 "updated_at": snapshot_time,
-                "applied_fill_keys": _position_fill_checkpoint(source_key, orders),
+                "applied_fill_keys": _position_fill_checkpoint(
+                    source_key,
+                    orders,
+                    snapshot_time=_legacy_timestamp(
+                        document.get("timestamp"), name="whole-system snapshot"
+                    ),
+                ),
                 **migration,
             }
         )
@@ -242,18 +276,40 @@ def convert_latest_strategy_snapshot(
 
 
 def _position_fill_checkpoint(
-    source_key: str, orders: Sequence[Mapping[str, Any]]
+    source_key: str,
+    orders: Sequence[Mapping[str, Any]],
+    *,
+    snapshot_time: datetime | None = None,
 ) -> list[str]:
     """Treat converted state as the operator-selected accounting baseline."""
-    return sorted(
-        {
-            fill["deduplication_key"]
-            for order in orders
-            if order.get("source_key") == source_key
-            and not isinstance(decode_tree(order["trade"]).contract, ibi.Bag)
-            for fill in order.get("fills", ())
-        }
-    )
+    keys: set[str] = set()
+    for order in orders:
+        if order.get("source_key") != source_key:
+            continue
+        is_bag = isinstance(decode_tree(order["trade"]).contract, ibi.Bag)
+        accounted = order.get("legacy_accounted_exec_ids")
+        if accounted is not None and not is_bag:
+            # Rebinding a legacy Trade can lose older Fill objects while its
+            # accounting keys survive. Late recovery must not count them twice.
+            if any(not isinstance(key, str) or not key for key in accounted):
+                raise ValueError(f"Source {source_key!r} has invalid legacy fill keys")
+            keys.update(accounted)
+        for fill in order.get("fills", ()):
+            record = FillRecord.decode(fill)
+            if snapshot_time is not None and record.time > snapshot_time:
+                raise ValueError(
+                    f"Source {source_key!r} has a fill newer than its snapshot; "
+                    "reconcile and flush the old runtime before migration"
+                )
+            if is_bag:
+                continue
+            if accounted is not None and record.deduplication_key not in accounted:
+                raise ValueError(
+                    f"Source {source_key!r} has an unaccounted legacy fill "
+                    f"{record.deduplication_key!r}; reconcile before migration"
+                )
+            keys.add(record.deduplication_key)
+    return sorted(keys)
 
 
 def _exposure(
@@ -465,22 +521,30 @@ def _latest_snapshot(collection: Any) -> Mapping[str, Any] | None:
     return collection.find_one({}, sort=[("timestamp", -1)])
 
 
-def _ensure_target_compatible(database: Any, *, source_database: str) -> None:
+def _ensure_target_compatible(
+    database: Any, *, source_database: str, source_fingerprint: str
+) -> None:
     """Refuse a non-empty target that was not created by this converter."""
 
+    foreign = set(database.list_collection_names()) - COLLECTION_IDENTITIES.keys()
+    if foreign:
+        raise RuntimeError(
+            f"Target database contains foreign collections: {sorted(foreign)}"
+        )
     for collection_name in ("orders", "state", "blotter"):
         collection = database[collection_name]
-        count = collection.estimated_document_count()
+        count = collection.count_documents({})
         compatible = collection.count_documents(
             {
                 "migration_version": MIGRATION_VERSION,
                 "source_database": source_database,
+                "source_fingerprint": source_fingerprint,
             }
         )
         if count != compatible:
             raise RuntimeError(
                 f"Target collection {collection_name!r} is incompatible or "
-                "contains foreign/non-migration data"
+                "contains foreign, changed-source, or runtime-written data"
             )
 
 
@@ -501,6 +565,223 @@ def _upsert_documents(
         )
         count += 1
     return count
+
+
+def _fingerprint(value: Any) -> str:
+    """Hash BSON values canonically, including timestamps and source identities."""
+    encoded = json_util.dumps(
+        value, sort_keys=True, json_options=json_util.CANONICAL_JSON_OPTIONS
+    )
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _read_source(database: Any, strategy_collection: str) -> dict[str, Any]:
+    """Capture accounting evidence without instantiating runtime database services."""
+    return {
+        "orders": list(database["orders"].find({})),
+        "state": list(database["state"].find({})),
+        "blotter": list(database["blotter"].find({})),
+        "strategy_collection": strategy_collection,
+        "snapshot": _latest_snapshot(database[strategy_collection]),
+        "strategy_snapshots": database[strategy_collection].count_documents({}),
+    }
+
+
+def _source_fingerprint(source: Mapping[str, Any]) -> str:
+    """Make source identity independent of Mongo cursor ordering."""
+    return _fingerprint(
+        {
+            **source,
+            **{
+                name: sorted(_fingerprint(document) for document in source[name])
+                for name in COLLECTION_IDENTITIES
+            },
+        }
+    )
+
+
+def _require_unique(documents: Sequence[Mapping[str, Any]], field: str) -> None:
+    """Reject missing or duplicate natural identities before any target writes."""
+    identities = [document.get(field) for document in documents]
+    if any(identity is None for identity in identities):
+        raise ValueError(f"Missing {field} in converted records")
+    duplicates = [
+        identity for identity, count in Counter(identities).items() if count > 1
+    ]
+    if duplicates:
+        raise ValueError(f"Duplicate {field} in converted records: {duplicates}")
+
+
+class _ValidationSaver(AbstractBaseSaver):
+    """Keep Book restoration and projection repairs entirely in memory."""
+
+    def __init__(self, documents: Sequence[Mapping[str, Any]], identity: str) -> None:
+        self.documents = {
+            document[identity]: deepcopy(dict(document)) for document in documents
+        }
+        self.identity = identity
+
+    def save(self, data: Any, /, *args: Any) -> None:
+        self.documents[data[self.identity]] = deepcopy(data)
+
+    def read(self, key: Any = None, /, *args: Any) -> list[dict[str, Any]]:
+        return deepcopy(
+            [
+                document
+                for document in self.documents.values()
+                if all(
+                    document.get(name) == value for name, value in (key or {}).items()
+                )
+            ]
+        )
+
+
+def _validate_restoration(
+    orders: Sequence[Mapping[str, Any]],
+    states: Sequence[Mapping[str, Any]],
+    *,
+    legacy: bool,
+) -> dict[str, Any]:
+    """Restore real Book accounting using isolated savers and inspect identities."""
+    book = Book(
+        order_saver=_ValidationSaver(orders, "orderId"),
+        state_saver=_ValidationSaver(states, "state_key"),
+        save_async=False,
+        restore=True,
+    )
+    perm_ids: set[int] = set()
+    fill_keys: set[str] = set()
+    accounts: set[str] = set()
+    for info in book.orders.query():
+        if info.permId and info.permId in perm_ids:
+            raise ValueError(f"Ambiguous broker permId={info.permId}")
+        perm_ids.add(info.permId)
+        if info.trade.order.account:
+            accounts.add(info.trade.order.account)
+        for record in info.fills:
+            if record.deduplication_key in fill_keys:
+                raise ValueError(
+                    f"Duplicate fill identity {record.deduplication_key!r}"
+                )
+            fill_keys.add(record.deduplication_key)
+            if record.execution.acctNumber:
+                accounts.add(record.execution.acctNumber)
+    if len(accounts) > 1:
+        raise ValueError("Source contains more than one account/subaccount")
+    if legacy:
+        for document in states:
+            expected = PositionState.decode(document)
+            restored = book.positions.for_source(expected.source_key)
+            if restored is None or restored.encode() != expected.encode():
+                raise ValueError(
+                    f"Book restoration changes legacy source {expected.source_key!r}"
+                )
+        _validate_legacy_protection(book)
+    return {
+        "validated": True,
+        "accounts": sorted(accounts),
+        "positions_by_con_id": {
+            str(contract.conId): quantity
+            for contract, quantity in book.positions.by_contract().items()
+        },
+        "sources": {
+            state.source_key: {
+                "quantity": state.quantity,
+                "target_quantity": state.target_quantity,
+                "position_id": state.position_id,
+                "blocked_direction": state.blocked_direction,
+                "execution_model_name": state.execution_model_name,
+            }
+            for state in book.positions.source_states().values()
+        },
+    }
+
+
+def _validate_legacy_protection(book: Book) -> None:
+    """Require settled episodes with matching live protection before cutover."""
+    for state in book.positions.source_states().values():
+        if state.quantity and (
+            state.contract is None or not state.contract.conId or not state.position_id
+        ):
+            raise ValueError(
+                f"Held source {state.source_key!r} lacks a concrete Contract or episode"
+            )
+        stops: list[OrderInfo] = []
+        protection = book.orders.active(source_key=state.source_key)
+        for info in protection:
+            remaining = info.trade.order.totalQuantity - sum(
+                record.execution.shares for record in info.fills
+            )
+            if (
+                not state.quantity
+                or not info.permId
+                or info.position_id != state.position_id
+                or info.trade.contract != state.contract
+                or info.trade.order.action != ("SELL" if state.quantity > 0 else "BUY")
+                or remaining != abs(state.quantity)
+            ):
+                raise ValueError(
+                    f"Protective orderId={info.orderId} disagrees with source {state.source_key!r}"
+                )
+            if info.role == "STOP_LOSS":
+                stops.append(info)
+        if state.quantity and len(stops) != 1:
+            raise ValueError(
+                f"Held source {state.source_key!r} requires exactly one active stop before cutover"
+            )
+        if len(protection) > 1:
+            groups = {info.trade.order.ocaGroup for info in protection}
+            if len(groups) != 1 or "" in groups:
+                raise ValueError(
+                    f"Source {state.source_key!r} has inconsistent protection OCA groups"
+                )
+
+
+def _validate_settled_orders(
+    orders: Sequence[Mapping[str, Any]],
+    states: Sequence[Mapping[str, Any]],
+    *,
+    legacy: bool,
+) -> None:
+    """Reject working trading intent and incomplete legacy attribution."""
+    sources = {
+        state.get("source_key")
+        for state in states
+        if state.get("state_type") == "position"
+    }
+    for document in orders:
+        info = OrderInfo.decode(document)
+        if bool(document["active"]) != info.active:
+            raise ValueError(
+                f"orderId={info.orderId} active flag disagrees with Trade status"
+            )
+        if info.active and info.role not in {"STOP_LOSS", "TAKE_PROFIT"}:
+            raise ValueError(
+                f"Finish pending {info.role} orderId={info.orderId} under the old runtime before migration"
+            )
+        if (
+            legacy
+            and info.source_key not in sources
+            and (info.fills or info.active or document.get("legacy_accounted_exec_ids"))
+        ):
+            raise ValueError(
+                f"Missing legacy snapshot source for orderId={info.orderId}: {info.source_key!r}"
+            )
+
+
+def _verify_written_target(database: Any, expected: Mapping[str, Any]) -> None:
+    """Read back every target record and refuse missing, extra or altered data."""
+    for collection in COLLECTION_IDENTITIES:
+        actual = [
+            {key: value for key, value in document.items() if key != "_id"}
+            for document in database[collection].find({})
+        ]
+        if sorted(map(_fingerprint, actual)) != sorted(
+            map(_fingerprint, expected[collection])
+        ):
+            raise RuntimeError(
+                f"Target {collection!r} does not match the complete conversion plan; do not launch"
+            )
 
 
 def validation_report(
@@ -589,34 +870,72 @@ def migrate(
     source_database: str,
     target_database: str,
     apply: bool = False,
+    strategy_collection: str = "strategies",
+    source_stopped: bool = False,
 ) -> dict[str, Any]:
-    """Convert records and optionally write a fresh target database."""
+    """Copy settled accounting into a separate database, preserving the source.
+
+    Args:
+        client: Mongo client configured with timezone-aware decoding.
+        source_database: Existing database, read only throughout conversion.
+        target_database: Fresh database, or an unfinished identical conversion.
+        apply: Write only after source and in-memory restoration checks pass.
+        strategy_collection: Legacy whole-system snapshot collection.
+        source_stopped: Operator confirms the old runtime was stopped after
+            reconciliation and its final persistence flush. Required to apply.
+
+    Returns:
+        Evidence counts, restoration results, source fingerprint and write status.
+
+    Raises:
+        ValueError: If accounting or cutover preconditions are ambiguous.
+        RuntimeError: If the source changes or target compatibility/verification fails.
+    """
 
     if not source_database or not target_database:
         raise ValueError("source and target database names are required")
     if source_database == target_database:
         raise ValueError("source and target databases must be different")
+    if not strategy_collection or strategy_collection in COLLECTION_IDENTITIES:
+        raise ValueError(
+            "strategy_collection must be a distinct legacy snapshot collection"
+        )
+    if apply and not source_stopped:
+        raise ValueError(
+            "--apply requires --source-stopped after reconciliation and final persistence flush"
+        )
     source = client[source_database]
     target = client[target_database]
+    original = _read_source(source, strategy_collection)
+    source_fingerprint = _source_fingerprint(original)
     _ensure_target_compatible(
         target,
         source_database=source_database,
+        source_fingerprint=source_fingerprint,
     )
 
-    original_orders = list(source["orders"].find({}))
+    original_orders = original["orders"]
     orders = [
         convert_order(document, source_database=source_database)
         for document in original_orders
     ]
-    snapshot = _latest_snapshot(source["strategies"])
+    snapshot = original["snapshot"]
+    component_states = original["state"]
+    if snapshot is None and not component_states:
+        raise ValueError(
+            f"No snapshot in {strategy_collection!r} and no component state; "
+            "select the real legacy collection with --strategy-collection"
+        )
     states = (
         convert_latest_strategy_snapshot(
-            snapshot, source_database=source_database, orders=orders
+            snapshot,
+            source_database=source_database,
+            orders=orders,
+            source_collection=strategy_collection,
         )
         if snapshot is not None
         else []
     )
-    component_states = list(source["state"].find({}))
     if component_states:
         if snapshot is not None:
             raise ValueError(
@@ -627,24 +946,45 @@ def migrate(
         )
     blotter = [
         convert_blotter(document, source_database=source_database)
-        for document in source["blotter"].find({})
+        for document in original["blotter"]
     ]
+    converted = {"orders": orders, "state": states, "blotter": blotter}
+    for collection, identity in COLLECTION_IDENTITIES.items():
+        _require_unique(converted[collection], identity)
+        _require_unique(converted[collection], "migration_key")
+        for document in converted[collection]:
+            document["source_fingerprint"] = source_fingerprint
+    legacy = snapshot is not None
+    _validate_settled_orders(orders, states, legacy=legacy)
+    restoration = _validate_restoration(orders, states, legacy=legacy)
+    if (
+        _source_fingerprint(_read_source(source, strategy_collection))
+        != source_fingerprint
+    ):
+        raise RuntimeError(
+            "Source changed during conversion; stop and reconcile the old runtime, then retry"
+        )
     report = validation_report(orders, states, blotter)
     report["mode"] = "apply" if apply else "dry-run"
     report["source_database"] = source_database
     report["target_database"] = target_database
+    report["strategy_collection"] = strategy_collection
+    report["source_fingerprint"] = source_fingerprint
+    report["source_stopped_confirmed"] = source_stopped
+    report["book_restoration"] = restoration
+    report["arctic_libraries"] = "untouched; new runtime starts separate audit history"
     report["source_counts"] = {
-        "orders": source["orders"].estimated_document_count(),
-        "strategy_snapshots": source["strategies"].estimated_document_count(),
+        "orders": len(original_orders),
+        "strategy_snapshots": original["strategy_snapshots"],
         "state": len(component_states),
-        "blotter": source["blotter"].estimated_document_count(),
+        "blotter": len(original["blotter"]),
     }
     if apply:
         target["orders"].create_index("orderId", unique=True)
-        target["orders"].create_index("migration_key", unique=True)
+        target["orders"].create_index("migration_key", unique=True, sparse=True)
         target["state"].create_index("state_key", unique=True)
-        target["state"].create_index("migration_key", unique=True)
-        target["blotter"].create_index("migration_key", unique=True)
+        target["state"].create_index("migration_key", unique=True, sparse=True)
+        target["blotter"].create_index("migration_key", unique=True, sparse=True)
         _upsert_documents(
             target["orders"],
             orders,
@@ -660,15 +1000,12 @@ def migrate(
             blotter,
             identity_field="migration_key",
         )
-        report["target_counts"] = {
-            collection_name: target[collection_name].estimated_document_count()
-            for collection_name in ("orders", "state", "blotter")
-        }
-    else:
-        report["target_counts"] = {
-            collection_name: target[collection_name].estimated_document_count()
-            for collection_name in ("orders", "state", "blotter")
-        }
+        _verify_written_target(target, converted)
+        report["target_verified"] = True
+    report["target_counts"] = {
+        collection_name: target[collection_name].count_documents({})
+        for collection_name in COLLECTION_IDENTITIES
+    }
     return report
 
 
@@ -679,6 +1016,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mongo-uri", default="mongodb://localhost:27017")
     parser.add_argument("--source-db", required=True)
     parser.add_argument("--target-db", required=True)
+    parser.add_argument(
+        "--strategy-collection",
+        default="strategies",
+        help="legacy snapshot collection (use the old profile's strategy_collection_name)",
+    )
+    parser.add_argument(
+        "--source-stopped",
+        action="store_true",
+        help="confirm the old runtime stopped after reconciliation and final persistence flush",
+    )
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -691,13 +1038,15 @@ def main() -> None:
     """Run conversion and print its validation report as JSON."""
 
     args = parse_args()
-    client = MongoClient(args.mongo_uri, tz_aware=True)
-    report = migrate(
-        client,
-        source_database=args.source_db,
-        target_database=args.target_db,
-        apply=args.apply,
-    )
+    with MongoClient(args.mongo_uri, tz_aware=True) as client:
+        report = migrate(
+            client,
+            source_database=args.source_db,
+            target_database=args.target_db,
+            apply=args.apply,
+            strategy_collection=args.strategy_collection,
+            source_stopped=args.source_stopped,
+        )
     print(json.dumps(report, default=str, indent=2, sort_keys=True))
 
 

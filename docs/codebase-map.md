@@ -209,6 +209,11 @@ Router forwards it without taking ownership of Portfolio allocation policy.
   private Arctic implementation of the narrow `FrameStoreProvider` contract.
 - `haymaker/blotter.py`, `saver.py`: explicitly configured transaction logging
   sinks such as CSV and Mongo-backed savers.
+- `scripts/migrate_components_state.py`: standalone conversion of settled legacy
+  snapshots or prior component records into a distinct Book database. Selects
+  the legacy snapshot collection, validates restoration with in-memory savers,
+  verifies target readback and preserves the source and Arctic libraries.
+  See [State conversion](source/execution.rst) for cutover and retry requirements.
 - `haymaker/logging/`: centralized YAML and queue-listener lifecycle setup,
   custom handler implementations, one listener thread per configured
   destination, and optional Telegram delivery. `App` installs the package's

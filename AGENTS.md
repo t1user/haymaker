@@ -250,8 +250,13 @@ and distinguish pre-existing failures from regressions.
 ## Conversion safety
 
 `scripts/migrate_components_state.py` is standalone, dry-run by default, and
-writes only with explicit `--apply` and distinct source/fresh target database
-names. Preserve complete evidence, IB identifiers, source/episode attribution,
-honest timestamps and deterministic provenance. Refuse ambiguous allocations,
-foreign/mixed target data and incompatible in-flight rolls. Test conversion
-with fakes only; never run a real migration during code work.
+writes only with explicit `--apply --source-stopped` and distinct source/fresh
+target database names. Select the actual legacy snapshot collection. Require
+reconciled, flushed, settled state; only protective orders may remain active.
+Preserve complete evidence, IB identifiers, source/episode attribution, honest
+timestamps and deterministic provenance. Validate Book restoration in memory
+before writes and verify complete target readback. Refuse ambiguous allocations,
+changed-source retries, foreign/mixed targets and incompatible in-flight work.
+Keep provenance indexes sparse for later runtime writes. Arctic libraries stay
+untouched. See [State conversion](docs/source/execution.rst) for the workflow.
+Test conversion with fakes only; never run a real migration during code work.

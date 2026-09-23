@@ -1053,17 +1053,38 @@ latch. The default policy will fail again if the repaired state still disagrees.
 State conversion
 ================
 
-The standalone converter is dry-run by default and never modifies its source:
+The standalone converter is dry-run by default and never modifies its source.
+Select the actual legacy snapshot collection from the old profile's
+``state_machine.strategy_collection_name`` (the CLI default is ``strategies``):
 
 .. code-block:: bash
 
    python scripts/migrate_components_state.py \
        --source-db legacy_haymaker \
-       --target-db fresh_components
+       --target-db fresh_components \
+       --strategy-collection models \
+       --source-stopped
 
-Inspect the count, P&L, identifier, active-state, and episode report. Add
-``--apply`` only after selecting an empty target database. Compatible reruns
-are idempotent; mixed or foreign target data is refused.
+Before cutover, reconcile the old runtime, finish entries, closes, reversals and
+futures rolls, then stop it and flush its persistence queues. Existing positions
+may remain open with their protective orders. ``--source-stopped`` confirms this
+operator-owned prerequisite; the converter does not connect to the broker or
+verify that a process has stopped. It is mandatory with ``--apply``. A preliminary
+dry-run may omit it, but must be repeated against the settled source.
+
+Inspect the count, P&L, broker identifier, source/episode and restored-position
+report. Add ``--apply`` to the same command only after accepting that report and
+selecting a fresh, distinct target database. The converter writes ``orders``,
+``state`` and ``blotter`` there; no collection suffixes are needed across separate
+databases. It verifies every written record by reading the target back. Do not
+launch after an exception or incomplete verification.
+
+An interrupted conversion can be rerun against the identical source snapshot.
+Source fingerprints prevent changed-source retries from overwriting an earlier
+conversion. Foreign collections, mixed records, other converter versions and
+runtime-written targets are refused. Once the new runtime has used the target,
+do not run conversion into it again. Provenance indexes are sparse so ordinary
+runtime records without migration metadata can coexist with converted records.
 
 The converter accepts legacy strategy snapshots or component ``state`` records,
 not a mixture of both. It preserves complete Trade diagnostics and authoritative
@@ -1076,8 +1097,37 @@ decision before conversion. Finish pending rolls under the old implementation
 before changing their schema. Existing non-empty databases produced by another
 converter version are incompatible targets.
 
+Legacy conversion preserves the latest authoritative quantity, direction block,
+episode identity and original bracket inputs, with ``legacy:<source_key>`` model
+names. The adapted strategy must use those names and the same source keys.
+Settled targets equal held quantities. Historical fills and legacy accounting
+keys become source checkpoints, preserving reconciled corrections instead of
+replaying history over the snapshot. Newer or explicitly unaccounted fills,
+missing snapshot sources, duplicate identities, multiple accounts and working
+non-protective orders are refused. Each held legacy episode must have exactly
+one matching active stop; optional take-profits must match its quantity,
+Contract, direction, episode and OCA group. Missing old trailing stops are not
+reconstructed. Zero broker order IDs and contradictory persisted active/status
+evidence need explicit repair before conversion; no broker identities or final
+statuses are invented.
+
+Before writing, conversion restores a real Book using isolated in-memory savers
+and checks legacy state and protection. It rereads the source to detect changes.
+These checks establish restorable accounting, not live broker agreement: startup
+still reconciles the account and uses the configured mismatch policy. A protective
+fill after the old runtime stops must be recovered by the new runtime before
+strategy startup. Run only one runtime against the account.
+
 The report distinguishes optional blotter totals from deduplicated Fill-level
 commission/P&L totals and includes source/episode order grouping even when
 blotter writing was disabled. No live schema fallback or dual writes exist.
 Derived balance documents are not copied by the converter: Book reconstructs
 them from the converted accounting records at startup.
+
+All old snapshot history and additional legacy fields remain in the source
+database; only the latest operational state is converted. Arctic libraries,
+symbols, versions and metadata are untouched. Configure separate new audit
+library names in the strategy profile; ``storage.mongodb.database`` does not
+select Arctic libraries. Keeping the old database and libraries preserves
+history, but the old snapshot becomes stale after new trading and cannot serve
+as an immediate rollback state.
