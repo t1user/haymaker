@@ -159,6 +159,34 @@ def test_arctic_store_initializes_a_shared_library_only_once(
     assert first.store is not second.store
 
 
+def test_arctic_write_tracks_latest_timestamp_after_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Older backfill rows must not move saved completion metadata backward."""
+
+    backend = MagicMock()
+    backend.read_metadata.return_value.metadata = {"up_to": "2026-09-30T00:00:00+00:00"}
+    arctic = MagicMock()
+    arctic.__getitem__.return_value = backend
+    monkeypatch.setattr(
+        "haymaker.datastore.datastore.Arctic", Mock(return_value=arctic)
+    )
+    store = ArcticStore("TRADES_30_secs")
+    data = pd.DataFrame(
+        {"close": [100.0, 101.0, 98.0, 99.0]},
+        index=pd.to_datetime(
+            ["2026-10-01", "2026-10-02", "2026-09-29", "2026-09-30"], utc=True
+        ),
+    )
+
+    store.write("ESZ6_FUT", data)
+
+    args, kwargs = backend.write.call_args
+    assert args[0] == "ESZ6_FUT"
+    pd.testing.assert_frame_equal(args[1], data.sort_index())
+    assert kwargs["metadata"]["up_to"] == "2026-10-02T00:00:00+00:00"
+
+
 @pytest.mark.asyncio
 async def test_awaited_arctic_mutations_return_backend_results(
     monkeypatch: pytest.MonkeyPatch,

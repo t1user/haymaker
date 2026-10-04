@@ -349,6 +349,9 @@ library name is derived from ``download.what_to_show`` and
 
 Collections use Haymaker's default contract naming policy.
 
+Saved ``up_to`` metadata records the latest timestamp in the complete series,
+including when older backfill data is merged into existing history.
+
 Each save creates a complete new Arctic version of the series. The dataloader
 does not append fragments directly, so a saved version remains independently
 readable. ``save_every_chunks`` controls how frequently a long download creates

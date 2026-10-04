@@ -205,13 +205,14 @@ class ArcticStore(AbstractBaseStore):
         data: pd.DataFrame,
         meta: dict | None = None,
     ) -> str:
+        data = self._clean(data)
         metadata = self._metadata(symbol)
         if meta is not None:
             metadata.update(meta)
         metadata["up_to"] = self._up_to(data)
         version = self.store.write(
             self._symbol(symbol),
-            self._clean(data),
+            data,
             metadata=self._update_metadata(symbol, metadata),
         )
         return f"symbol: {version.symbol} version: {version.version}"
