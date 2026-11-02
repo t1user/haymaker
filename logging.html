@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="Execution Module" href="execution.html"><link rel="prev" title="Configuration" href="configuration.html">
+<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="Connection Supervisor" href="supervisor.html"><link rel="prev" title="Configuration" href="configuration.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
         <title>Logging - Haymaker documentation</title>
@@ -198,6 +198,8 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -256,7 +258,10 @@
         <article role="main" id="furo-main-content">
           <section id="logging">
 <h1>Logging<a class="headerlink" href="#logging" title="Link to this heading">¶</a></h1>
-<p>All logging in Haymaker is performed asynchronously in a separate thread, ensuring that logging operations do not block or interfere with other actions.</p>
+<p>Every configured logging destination runs behind its own queue and listener
+thread. Formatting, file output, console output, and network delivery therefore
+do not block the asyncio application loop. Separate destination threads also
+prevent a slow network messenger from delaying file logs.</p>
 <section id="custom-logging-levels">
 <h2>Custom Logging Levels<a class="headerlink" href="#custom-logging-levels" title="Link to this heading">¶</a></h2>
 <p>In addition to standard Python logging levels, Haymaker defines two custom levels:</p>
@@ -268,17 +273,29 @@
 </section>
 <section id="logging-configuration">
 <h2>Logging Configuration<a class="headerlink" href="#logging-configuration" title="Link to this heading">¶</a></h2>
-<p>You can customize logging by defining a <a class="reference external" href="https://docs.python.org/3/library/logging.config.html#configuration-file-format">logging configuration</a> in YAML format. Point Haymaker to this file by setting the <code class="docutils literal notranslate"><span class="pre">logging_config</span></code> configuration variable to its absolute path. This can be done via:</p>
-<ul class="simple">
-<li><p>A YAML configuration file (e.g., under <code class="docutils literal notranslate"><span class="pre">logging_config</span></code>).</p></li>
-<li><p>Command-line option (e.g., <code class="docutils literal notranslate"><span class="pre">-s</span> <span class="pre">logging_config</span> <span class="pre">/path/to/config.yaml</span></code>).</p></li>
-<li><p>Environment variable (e.g., <code class="docutils literal notranslate"><span class="pre">HAYMAKER_LOGGING_CONFIG=/path/to/config.yaml</span></code>).</p></li>
-</ul>
-<p>The log file location (when logging to a file) is set with the <code class="docutils literal notranslate"><span class="pre">logging_path</span></code> configuration variable. This specifies a subdirectory within the folder defined by the <code class="docutils literal notranslate"><span class="pre">data_folder</span></code> variable. If the subdirectory doesn’t exist, Haymaker creates it.</p>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Both <code class="docutils literal notranslate"><span class="pre">logging_config</span></code> and <code class="docutils literal notranslate"><span class="pre">logging_path</span></code> can be set in your configuration YAML file, via CLI with <code class="docutils literal notranslate"><span class="pre">-s</span></code>, or as environment variables prefixed with <code class="docutils literal notranslate"><span class="pre">HAYMAKER_</span></code>.</p>
+<p>You can customize logging by defining a <a class="reference external" href="https://docs.python.org/3/library/logging.config.html#configuration-file-format">logging configuration</a> in YAML format. Point Haymaker to this file with <code class="docutils literal notranslate"><span class="pre">logging.config_file</span></code> in the framework configuration:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">logging</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">config_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/logging.yaml</span>
+<span class="w">  </span><span class="nt">directory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production_logs</span>
+<span class="w">  </span><span class="nt">level</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span>
+<span class="w">  </span><span class="nt">log_broker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="nt">storage</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">base_directory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/lib/haymaker</span>
+</pre></div>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">logging.directory</span></code> is interpreted relative to <code class="docutils literal notranslate"><span class="pre">storage.base_directory</span></code>.
+Haymaker creates missing output directories used by its built-in handlers.
+Set <code class="docutils literal notranslate"><span class="pre">logging.level</span></code> to a standard level name or number to override the
+<code class="docutils literal notranslate"><span class="pre">haymaker</span></code> package logger, or leave it <code class="docutils literal notranslate"><span class="pre">null</span></code> to use the logging file.
+The same settings can be changed temporarily with dotted CLI overrides:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>haymaker<span class="w"> </span>strategy.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--set-option<span class="w"> </span>logging.config_file<span class="w"> </span>/path/to/logging.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--set-option<span class="w"> </span>logging.directory<span class="w"> </span>production_logs
+</pre></div>
+</div>
+<p>Direct environment-value overrides are not supported. An environment variable
+may select a complete framework YAML file as described in
+<a class="reference internal" href="configuration.html"><span class="doc">Configuration</span></a>.</p>
 </section>
 <section id="execution-module">
 <h2>Execution Module<a class="headerlink" href="#execution-module" title="Link to this heading">¶</a></h2>
@@ -288,11 +305,28 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">strategy</span></code>: Tracks signals generated by strategies. The default <a class="reference internal" href="execution.html#haymaker.block.AbstractBaseBlock" title="haymaker.block.AbstractBaseBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractBaseBlock</span></code></a> implementation logs all data sent via <code class="docutils literal notranslate"><span class="pre">dataEvent</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">broker</span></code>: Captures all <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.ib.IB" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.ib.IB</span></code></a> events with broker messages.</p></li>
 </ul>
+<p>Broker messages reported through <code class="docutils literal notranslate"><span class="pre">IB.errorEvent</span></code> are not necessarily
+actionable failures. Normal execution logging classifies known actionable
+messages and otherwise keeps them at debug level. Codes listed under the
+<code class="docutils literal notranslate"><span class="pre">controller.ignore_errors</span></code> configuration key are omitted from normal
+controller logs to avoid noise. Supervisor-owned connection and data-farm status
+codes are handled by the supervisor instead.</p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">logging.log_broker</span></code> to <code class="docutils literal notranslate"><span class="pre">true</span></code> to enable the separate <code class="docutils literal notranslate"><span class="pre">broker</span></code> audit logger.
+It records the raw broker event stream to <code class="docutils literal notranslate"><span class="pre">broker.log</span></code>, including codes
+omitted from normal logs.</p>
 <p>To customize logging, copy the default configuration file and override it as needed. The default file is located at:</p>
 <p><a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml</a></p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/logging/logging_config.yaml">haymaker/logging/logging_config.yaml</a></p></li>
 </ul>
+<p>Messenger handlers are optional. Telegram is available through
+<code class="docutils literal notranslate"><span class="pre">haymaker.logging.handlers.TelegramHandler</span></code> when declared in a custom logging
+YAML file, but neither Telegram nor another messenger is required by the live
+runtime. The built-in Telegram handler uses a finite network timeout, and its
+queue/listener thread is independent from local output handlers. If Telegram’s
+delivery confirmation is unavailable after a request was sent, the handler
+writes one concise diagnostic to standard error and does not retry because the
+notification may already have been delivered.</p>
 </section>
 <section id="dataloader-module">
 <h2>Dataloader Module<a class="headerlink" href="#dataloader-module" title="Link to this heading">¶</a></h2>
@@ -307,12 +341,12 @@
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="execution.html">
+          <a class="next-page" href="supervisor.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Execution Module</div>
+                <div class="title">Connection Supervisor</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>

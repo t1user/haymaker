@@ -197,6 +197,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -264,13 +266,13 @@
 <div class="viewcode-block" id="AbstractBaseBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AbstractBaseBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">AbstractBaseBinarySignalProcessor</span><span class="p">(</span><span class="n">Atom</span><span class="p">,</span> <span class="n">ABC</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Process binary signals, i.e. long/short/off, as opposed to</span>
 <span class="sd">    descrete signals, where signal strength is meaningful (e.g. signal</span>
 <span class="sd">    assuming values -10...10 based on strength of conviction).</span>
 
 <span class="sd">    Actual position size or even whether the position should be taken</span>
-<span class="sd">    at all is not determined here, it&#39;s the job of `Portfolio`.</span>
+<span class="sd">    at all is not determined here, it's the job of `Portfolio`.</span>
 
 <span class="sd">    Actual meaning of signals is defined in sub-classes, by overriding</span>
 <span class="sd">    methods: :meth:`process_position` and :meth:`process_no_position`.</span>
@@ -278,7 +280,7 @@
 <span class="sd">    Whatever the meaning of the signal coming in, signal coming out</span>
 <span class="sd">    means strategy wants to take `action` in the direction of</span>
 <span class="sd">    `signal`, as indicated by keys `action` and `signal` in the</span>
-<span class="sd">    emitted dict.  Incoming signals that don&#39;t require any action will</span>
+<span class="sd">    emitted dict.  Incoming signals that don't require any action will</span>
 <span class="sd">    be stopped here and not propagated down the chain.</span>
 
 <span class="sd">    In sub-class names `blip` means zero signal should be ignored,</span>
@@ -291,33 +293,26 @@
 <span class="sd">    signal in (open position) and signal out (close position), if</span>
 <span class="sd">    `tuple` then first element is signal in and second is signal out</span>
 
-<span class="sd">    state_machine - this is for testing only and should not be passed</span>
-<span class="sd">    in non-testing environment</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;signal&quot;</span><span class="p">,</span>
-        <span class="n">state_machine</span><span class="p">:</span> <span class="n">StateMachine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"signal"</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># passing state machine is only for testing</span>
-        <span class="k">if</span> <span class="n">state_machine</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">sm</span> <span class="o">=</span> <span class="n">state_machine</span>  <span class="c1"># type: ignore</span>
-
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span> <span class="o">=</span> <span class="n">signal_fields</span>
         <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">,</span> <span class="p">(</span><span class="nb">tuple</span><span class="p">,</span> <span class="nb">list</span><span class="p">)):</span>
             <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
                 <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;signal_fields must be a str or a 2 element tuple/list, &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;not </span><span class="si">{</span><span class="n">signal_fields</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="sa">f</span><span class="s2">"signal_fields must be a str or a 2 element tuple/list, "</span>
+                    <span class="sa">f</span><span class="s2">"not </span><span class="si">{</span><span class="n">signal_fields</span><span class="si">}</span><span class="s2">"</span>
                 <span class="p">)</span>
                 <span class="k">raise</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span> <span class="o">=</span> <span class="n">signal_fields</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span> <span class="o">=</span> <span class="n">signal_fields</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_position</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
@@ -331,33 +326,33 @@
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span><span class="p">:</span>
                 <span class="n">fields</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span>
             <span class="k">else</span><span class="p">:</span>
-                <span class="n">fields</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing `</span><span class="si">{</span><span class="n">fields</span><span class="si">}</span><span class="s2">` expected by </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> in `onData`&quot;</span><span class="p">)</span>
+                <span class="n">fields</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span><span class="si">}</span><span class="s2">"</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Missing `</span><span class="si">{</span><span class="n">fields</span><span class="si">}</span><span class="s2">` expected by </span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> in `onData`"</span><span class="p">)</span>
             <span class="k">return</span>
-        <span class="c1"># &#39;strategy&#39; must exist, likely set by onStart</span>
-        <span class="n">strategy</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;strategy&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span>
+        <span class="c1"># 'strategy' must exist, likely set by onStart</span>
+        <span class="n">strategy</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"strategy"</span><span class="p">)</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span>
         <span class="k">if</span> <span class="n">result</span> <span class="o">:=</span> <span class="bp">self</span><span class="o">.</span><span class="n">process_signal</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">signal_in</span><span class="p">,</span> <span class="n">signal_out</span><span class="p">):</span>
             <span class="n">data</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
                 <span class="p">{</span>
-                    <span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="n">result</span><span class="p">,</span>
-                    <span class="s2">&quot;target_position&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_position</span><span class="p">(</span><span class="n">signal_in</span><span class="p">,</span> <span class="n">result</span><span class="p">),</span>
-                    <span class="s2">&quot;existing_position&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_position</span><span class="p">,</span>
+                    <span class="s2">"action"</span><span class="p">:</span> <span class="n">result</span><span class="p">,</span>
+                    <span class="s2">"target_position"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_position</span><span class="p">(</span><span class="n">signal_in</span><span class="p">,</span> <span class="n">result</span><span class="p">),</span>
+                    <span class="s2">"existing_position"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_position</span><span class="p">,</span>
                 <span class="p">}</span>
             <span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">data</span><span class="p">)</span></div>
 
 
     <span class="k">def</span><span class="w"> </span><span class="nf">target_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">signal</span><span class="p">,</span> <span class="n">result</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">result</span> <span class="o">==</span> <span class="s2">&quot;OPEN&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">result</span> <span class="o">==</span> <span class="s2">"OPEN"</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">signal</span>
-        <span class="k">elif</span> <span class="n">result</span> <span class="o">==</span> <span class="s2">&quot;REVERSE&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">result</span> <span class="o">==</span> <span class="s2">"REVERSE"</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">signal</span>
-        <span class="k">elif</span> <span class="n">result</span> <span class="o">==</span> <span class="s2">&quot;CLOSE&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">result</span> <span class="o">==</span> <span class="s2">"CLOSE"</span><span class="p">:</span>
             <span class="k">return</span> <span class="mi">0</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> generated unknown signal: </span><span class="si">{</span><span class="n">result</span><span class="si">}</span><span class="s2"> for strategy: &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> generated unknown signal: </span><span class="si">{</span><span class="n">result</span><span class="si">}</span><span class="s2"> for strategy: "</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="si">}</span><span class="s2">"</span>
             <span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_signal</span><span class="p">(</span>
@@ -373,10 +368,10 @@
 <div class="viewcode-block" id="AbstractBaseBinarySignalProcessor.position">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AbstractBaseBinarySignalProcessor.position">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Signal</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Which side of the market is position on: (short: -1, long: 1,</span>
 <span class="sd">        no position: 0)</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="c1"># record position state to assure that one value consistently used during</span>
         <span class="c1"># processing of the one data point</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">=</span> <span class="n">sign</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sm</span><span class="o">.</span><span class="n">position_and_order_for_strategy</span><span class="p">(</span><span class="n">strategy</span><span class="p">))</span>
@@ -386,7 +381,7 @@
 <div class="viewcode-block" id="AbstractBaseBinarySignalProcessor.same_direction">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AbstractBaseBinarySignalProcessor.same_direction">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">same_direction</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">signal</span><span class="p">:</span> <span class="n">Signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Is signal and position in the same direction?&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Is signal and position in the same direction?"""</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_position</span> <span class="o">==</span> <span class="n">signal</span></div>
 
 
@@ -403,7 +398,7 @@
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">process_non_zero_signal_no_position</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span> <span class="o">+</span> <span class="s2">&quot;()&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span> <span class="o">+</span> <span class="s2">"()"</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_no_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">None</span>
@@ -424,50 +419,50 @@
 <div class="viewcode-block" id="BinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.BinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">BinarySignalProcessor</span><span class="p">(</span><span class="n">AbstractBaseBinarySignalProcessor</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    * Zero signal means close position if position exists</span>
 
 <span class="sd">    * Non-zero signal means:</span>
 
 <span class="sd">    ** open new position if there is no position for the strategy</span>
 
-<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    ** ignore signal if it's in the same direction as existing</span>
 <span class="sd">    position</span>
 
 <span class="sd">    ** close position if the signal is in the direction opposite to</span>
 <span class="sd">    existing position</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="s2">&quot;CLOSE&quot;</span>
+        <span class="k">return</span> <span class="s2">"CLOSE"</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># We&#39;ve already checked signal is not same direction as position</span>
-        <span class="k">return</span> <span class="s2">&quot;CLOSE&quot;</span>
+        <span class="c1"># We've already checked signal is not same direction as position</span>
+        <span class="k">return</span> <span class="s2">"CLOSE"</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_no_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="s2">&quot;OPEN&quot;</span></div>
+        <span class="k">return</span> <span class="s2">"OPEN"</span></div>
 
 
 
 <div class="viewcode-block" id="BlipBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.BlipBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">BlipBinarySignalProcessor</span><span class="p">(</span><span class="n">BinarySignalProcessor</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    * Zero signal means do nothing</span>
 
 <span class="sd">    * Non-zero signal means:</span>
 
 <span class="sd">    ** open new position if there is no position for the strategy</span>
 
-<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    ** ignore signal if it's in the same direction as existing</span>
 <span class="sd">    position</span>
 
 <span class="sd">    ** close position if the signal is in the direction opposite to</span>
 <span class="sd">    existing position</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">None</span></div>
@@ -477,10 +472,10 @@
 <div class="viewcode-block" id="LockableBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.LockableBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">LockableBinarySignalProcessor</span><span class="p">(</span><span class="n">AbstractBaseBinarySignalProcessor</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    * Signals in the direction of last position are ignored (one side</span>
-<span class="sd">    of the market is &#39;locked&#39;).  It&#39;s up to :class:`StateMachine` to</span>
-<span class="sd">    determine which side is &#39;locked&#39; based on position actually taken</span>
+<span class="sd">    of the market is 'locked').  It's up to :class:`StateMachine` to</span>
+<span class="sd">    determine which side is 'locked' based on position actually taken</span>
 <span class="sd">    in the market (not just previously generated signals).</span>
 
 <span class="sd">    * Zero signal means close position if position exists</span>
@@ -489,27 +484,26 @@
 
 <span class="sd">    ** open new position if there is no position for the strategy</span>
 
-<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    ** ignore signal if it's in the same direction as existing</span>
 <span class="sd">    position</span>
 
 <span class="sd">    ** close position if the signal is in the direction opposite to</span>
 <span class="sd">    existing position</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;signal&quot;</span><span class="p">,</span>
-        <span class="n">state_machine</span><span class="p">:</span> <span class="n">StateMachine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"signal"</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_lock_direction</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span> <span class="o">=</span> <span class="kc">False</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">,</span> <span class="n">state_machine</span><span class="o">=</span><span class="n">state_machine</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">)</span>
 
 <div class="viewcode-block" id="LockableBinarySignalProcessor.onData">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.LockableBinarySignalProcessor.onData">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">onData</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">data</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s2">&quot;lock_direction&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock_direction</span><span class="p">,</span> <span class="s2">&quot;lock&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">})</span>
+        <span class="n">data</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s2">"lock_direction"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock_direction</span><span class="p">,</span> <span class="s2">"lock"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span><span class="p">})</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="n">onData</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div>
 
 
@@ -519,28 +513,28 @@
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_lock</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="s2">&quot;CLOSE&quot;</span>
+        <span class="k">return</span> <span class="s2">"CLOSE"</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># We&#39;ve already checked signal is not same direction as position</span>
-        <span class="c1"># Zero signal means &quot;CLOSE&quot;, oppposite signal means &quot;REVERSE&quot;</span>
-        <span class="k">return</span> <span class="s2">&quot;CLOSE&quot;</span>
+        <span class="c1"># We've already checked signal is not same direction as position</span>
+        <span class="c1"># Zero signal means "CLOSE", oppposite signal means "REVERSE"</span>
+        <span class="k">return</span> <span class="s2">"CLOSE"</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_no_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">locked</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">):</span>
             <span class="k">return</span> <span class="kc">None</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="s2">&quot;OPEN&quot;</span></div>
+            <span class="k">return</span> <span class="s2">"OPEN"</span></div>
 
 
 
 <div class="viewcode-block" id="LockableBlipBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.LockableBlipBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">LockableBlipBinarySignalProcessor</span><span class="p">(</span><span class="n">LockableBinarySignalProcessor</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    * Signals in the direction of last position are ignored (one side</span>
-<span class="sd">    of the market is &#39;locked&#39;).  It&#39;s up to :class:`StateMachine` to</span>
-<span class="sd">    determine which side is &#39;locked&#39; based on position actually taken</span>
+<span class="sd">    of the market is 'locked').  It's up to :class:`StateMachine` to</span>
+<span class="sd">    determine which side is 'locked' based on position actually taken</span>
 <span class="sd">    in the market (not just previously generated signals).</span>
 
 <span class="sd">    * Zero signal means do nothing</span>
@@ -549,13 +543,13 @@
 
 <span class="sd">    ** open new position if there is no position for the strategy</span>
 
-<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    ** ignore signal if it's in the same direction as existing</span>
 <span class="sd">    position</span>
 
 <span class="sd">    ** close position if the signal is in the direction opposite to</span>
 <span class="sd">    existing position</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">None</span></div>
@@ -565,10 +559,10 @@
 <div class="viewcode-block" id="AlwaysOnLockableBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AlwaysOnLockableBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">AlwaysOnLockableBinarySignalProcessor</span><span class="p">(</span><span class="n">LockableBinarySignalProcessor</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    * Signals in the direction of last position are ignored (one side</span>
-<span class="sd">    of the market is &#39;locked&#39;).  It&#39;s up to :class:`StateMachine` to</span>
-<span class="sd">    determine which side is &#39;locked&#39; based on position actually taken</span>
+<span class="sd">    of the market is 'locked').  It's up to :class:`StateMachine` to</span>
+<span class="sd">    determine which side is 'locked' based on position actually taken</span>
 <span class="sd">    in the market (not just previously generated signals).</span>
 
 <span class="sd">    * Zero signal means close position if position exists</span>
@@ -577,58 +571,56 @@
 
 <span class="sd">    ** open new position if there is no position for the strategy</span>
 
-<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    ** ignore signal if it's in the same direction as existing</span>
 <span class="sd">    position</span>
 
 <span class="sd">    ** reverse position if the signal is in the direction opposite to</span>
 <span class="sd">    existing position</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;signal&quot;</span><span class="p">,</span>
-        <span class="n">state_machine</span><span class="p">:</span> <span class="n">StateMachine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"signal"</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">,</span> <span class="n">state_machine</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> requires single signal field, not </span><span class="si">{</span><span class="n">signal_fields</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> requires single signal field, not </span><span class="si">{</span><span class="n">signal_fields</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
             <span class="k">raise</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">):</span>
-        <span class="k">return</span> <span class="s2">&quot;REVERSE&quot;</span></div>
+        <span class="k">return</span> <span class="s2">"REVERSE"</span></div>
 
 
 
 <div class="viewcode-block" id="AlwaysOnBinarySignalProcessor">
 <a class="viewcode-back" href="../../execution.html#haymaker.signals.AlwaysOnBinarySignalProcessor">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">AlwaysOnBinarySignalProcessor</span><span class="p">(</span><span class="n">BinarySignalProcessor</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    * Zero signal means close position if position exists</span>
 
 <span class="sd">    * Non-zero signal means:</span>
 
 <span class="sd">    ** open new position if there is no position for the strategy</span>
 
-<span class="sd">    ** ignore signal if it&#39;s in the same direction as existing</span>
+<span class="sd">    ** ignore signal if it's in the same direction as existing</span>
 <span class="sd">    position</span>
 
 <span class="sd">    ** close position if the signal is in the direction opposite to</span>
 <span class="sd">    existing position</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;signal&quot;</span><span class="p">,</span>
-        <span class="n">state_machine</span><span class="p">:</span> <span class="n">StateMachine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">signal_fields</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"signal"</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">,</span> <span class="n">state_machine</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">signal_fields</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_in_field</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">signal_out_field</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> requires single signal field, not </span><span class="si">{</span><span class="n">signal_fields</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> requires single signal field, not </span><span class="si">{</span><span class="n">signal_fields</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
             <span class="k">raise</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">process_non_zero_signal_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">strategy</span><span class="p">,</span> <span class="n">signal</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Action</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="s2">&quot;REVERSE&quot;</span></div>
+        <span class="k">return</span> <span class="s2">"REVERSE"</span></div>
 
 
 
@@ -637,7 +629,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">binary_signal_processor_factory</span><span class="p">(</span>
     <span class="n">lockable</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">always_on</span><span class="o">=</span><span class="kc">False</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Type</span><span class="p">[</span><span class="n">AbstractBaseBinarySignalProcessor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Helper function to return appropriate class based on parameters.</span>
 
 <span class="sd">    Parameters:</span>
@@ -648,8 +640,8 @@
 <span class="sd">            means other than stop-loss)</span>
 
 <span class="sd">        always_on:</span>
-<span class="sd">            True - &#39;CLOSE&#39; signal also opens position in reverese direction</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">            True - 'CLOSE' signal also opens position in reverese direction</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">lockable</span> <span class="ow">and</span> <span class="n">always_on</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">AlwaysOnLockableBinarySignalProcessor</span>
     <span class="k">elif</span> <span class="n">lockable</span><span class="p">:</span>

@@ -197,6 +197,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../../installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../../execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -248,7 +250,7 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for haymaker.research.backtester.pipeline</h1><div class="highlight"><pre>
-<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span></span><span class="sd">"""</span>
 <span class="sd">Refactored vector backtester.</span>
 
 <span class="sd">Public interface</span>
@@ -258,7 +260,7 @@
 <span class="sd">    :class:`TransactionFrame`-compatible DataFrame ready for :func:`perf`.</span>
 <span class="sd">    This is meant as an alternative to</span>
 <span class="sd">    :func:`~haymaker.research.stop.interface.stop_loss`</span>
-<span class="sd">    for strategies that don&#39;t use stop-loss.</span>
+<span class="sd">    for strategies that don't use stop-loss.</span>
 
 <span class="sd">``perf(data, slippage, skip_last_open, raise_exceptions)``</span>
 <span class="sd">    Main entry point.  Accepts the output of :func:`no_stop` or</span>
@@ -276,7 +278,7 @@
 <span class="sd">------</span>
 <span class="sd">The old ``backtester/vector_backtester.py`` is untouched.  Once this module is verified</span>
 <span class="sd">correct, ``__init__.py`` can be updated to expose this ``perf`` as the default.</span>
-<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">"""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -299,7 +301,7 @@
 <div class="viewcode-block" id="Results">
 <a class="viewcode-back" href="../../../../research/backtester.html#haymaker.research.Results">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">Results</span><span class="p">(</span><span class="n">NamedTuple</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Output of :func:`perf`.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Output of :func:`perf`."""</span>
 
     <span class="n">stats</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span>
     <span class="n">daily</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span>
@@ -316,14 +318,14 @@
 
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">_TransactionFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Internal validator for the DataFrame passed to :func:`perf`.</span>
+<span class="w">    </span><span class="sd">"""Internal validator for the DataFrame passed to :func:`perf`.</span>
 
 <span class="sd">    Not part of the public API.  Researchers should use :func:`no_stop` or</span>
 <span class="sd">    :func:`~haymaker.research.stop.interface.stop_loss` to produce valid input.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">REQUIRED_COLUMNS</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">frozenset</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span>
-        <span class="p">{</span><span class="s2">&quot;bar_price&quot;</span><span class="p">,</span> <span class="s2">&quot;open_price&quot;</span><span class="p">,</span> <span class="s2">&quot;close_price&quot;</span><span class="p">,</span> <span class="s2">&quot;stop_price&quot;</span><span class="p">,</span> <span class="s2">&quot;position&quot;</span><span class="p">}</span>
+        <span class="p">{</span><span class="s2">"bar_price"</span><span class="p">,</span> <span class="s2">"open_price"</span><span class="p">,</span> <span class="s2">"close_price"</span><span class="p">,</span> <span class="s2">"stop_price"</span><span class="p">,</span> <span class="s2">"position"</span><span class="p">}</span>
     <span class="p">)</span>
 
     <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span>
@@ -332,8 +334,8 @@
         <span class="n">missing</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">REQUIRED_COLUMNS</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;perf() received a DataFrame missing required columns: </span><span class="si">{</span><span class="n">missing</span><span class="si">}</span><span class="s2">. &quot;</span>
-                <span class="s2">&quot;Use no_stop() or stop_loss() to produce the input.&quot;</span>
+                <span class="sa">f</span><span class="s2">"perf() received a DataFrame missing required columns: </span><span class="si">{</span><span class="n">missing</span><span class="si">}</span><span class="s2">. "</span>
+                <span class="s2">"Use no_stop() or stop_loss() to produce the input."</span>
             <span class="p">)</span>
 
 
@@ -346,9 +348,9 @@
 <a class="viewcode-back" href="../../../../research/backtester.html#haymaker.research.no_stop">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">no_stop</span><span class="p">(</span>
     <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
-    <span class="n">price_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;open&quot;</span><span class="p">,</span>
+    <span class="n">price_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"open"</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert researcher signals into a transaction DataFrame for :func:`perf`.</span>
+<span class="w">    </span><span class="sd">"""Convert researcher signals into a transaction DataFrame for :func:`perf`.</span>
 
 <span class="sd">    Accepts a DataFrame with either a ``position`` column or a ``blip`` column</span>
 <span class="sd">    (and optionally a ``close_blip`` column).</span>
@@ -368,10 +370,10 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        DataFrame with columns: ``bar_price``, ``position``, ``open_price``,</span>
 <span class="sd">        ``close_price``, ``stop_price``.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">price_column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;&#39;</span><span class="si">{</span><span class="n">price_column</span><span class="si">}</span><span class="s2">&#39; indicated as price_column but not found in df&quot;</span>
+            <span class="sa">f</span><span class="s2">"'</span><span class="si">{</span><span class="n">price_column</span><span class="si">}</span><span class="s2">' indicated as price_column but not found in df"</span>
         <span class="p">)</span>
 
     <span class="n">price</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">price_column</span><span class="p">]</span>
@@ -379,16 +381,16 @@
     <span class="c1"># ------------------------------------------------------------------</span>
     <span class="c1"># Derive position series</span>
     <span class="c1"># ------------------------------------------------------------------</span>
-    <span class="k">if</span> <span class="s2">&quot;position&quot;</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-        <span class="n">position</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;position&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="s2">&quot;blip&quot;</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-        <span class="k">if</span> <span class="s2">&quot;close_blip&quot;</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-            <span class="n">signal</span> <span class="o">=</span> <span class="n">blip_sig</span><span class="p">(</span><span class="n">df</span><span class="p">[[</span><span class="s2">&quot;blip&quot;</span><span class="p">,</span> <span class="s2">&quot;close_blip&quot;</span><span class="p">]])</span>
+    <span class="k">if</span> <span class="s2">"position"</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">position</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"position"</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="s2">"blip"</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="k">if</span> <span class="s2">"close_blip"</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">signal</span> <span class="o">=</span> <span class="n">blip_sig</span><span class="p">(</span><span class="n">df</span><span class="p">[[</span><span class="s2">"blip"</span><span class="p">,</span> <span class="s2">"close_blip"</span><span class="p">]])</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="n">signal</span> <span class="o">=</span> <span class="n">blip_sig</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;blip&quot;</span><span class="p">])</span>
+            <span class="n">signal</span> <span class="o">=</span> <span class="n">blip_sig</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">"blip"</span><span class="p">])</span>
         <span class="n">position</span> <span class="o">=</span> <span class="n">sig_pos</span><span class="p">(</span><span class="n">signal</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;df must have either a &#39;position&#39; column or a &#39;blip&#39; column&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"df must have either a 'position' column or a 'blip' column"</span><span class="p">)</span>
 
     <span class="c1"># ------------------------------------------------------------------</span>
     <span class="c1"># Derive per-bar transaction prices using fast Numpy operations</span>
@@ -412,11 +414,11 @@
 
     <span class="n">out</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
         <span class="p">{</span>
-            <span class="s2">&quot;bar_price&quot;</span><span class="p">:</span> <span class="n">price_arr</span><span class="p">,</span>
-            <span class="s2">&quot;position&quot;</span><span class="p">:</span> <span class="n">pos_arr</span><span class="p">,</span>
-            <span class="s2">&quot;open_price&quot;</span><span class="p">:</span> <span class="n">open_price</span><span class="p">,</span>
-            <span class="s2">&quot;close_price&quot;</span><span class="p">:</span> <span class="n">close_price</span><span class="p">,</span>
-            <span class="s2">&quot;stop_price&quot;</span><span class="p">:</span> <span class="n">stop_price</span><span class="p">,</span>
+            <span class="s2">"bar_price"</span><span class="p">:</span> <span class="n">price_arr</span><span class="p">,</span>
+            <span class="s2">"position"</span><span class="p">:</span> <span class="n">pos_arr</span><span class="p">,</span>
+            <span class="s2">"open_price"</span><span class="p">:</span> <span class="n">open_price</span><span class="p">,</span>
+            <span class="s2">"close_price"</span><span class="p">:</span> <span class="n">close_price</span><span class="p">,</span>
+            <span class="s2">"stop_price"</span><span class="p">:</span> <span class="n">stop_price</span><span class="p">,</span>
         <span class="p">},</span>
         <span class="n">index</span><span class="o">=</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">,</span>
     <span class="p">)</span>
@@ -430,7 +432,7 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">get_min_tick</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate minimum tick from price data using fast numpy ops.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Estimate minimum tick from price data using fast numpy ops."""</span>
     <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
     <span class="n">diffs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diff</span><span class="p">(</span><span class="n">arr</span><span class="p">))</span>
     <span class="n">diffs</span> <span class="o">=</span> <span class="n">diffs</span><span class="p">[</span><span class="n">diffs</span> <span class="o">&gt;</span> <span class="mf">1e-10</span><span class="p">]</span>
@@ -442,11 +444,11 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_daily_returns</span><span class="p">(</span><span class="n">lreturn</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resample bar log-returns to business-daily simple returns.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Resample bar log-returns to business-daily simple returns."""</span>
     <span class="n">daily</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">()</span>
-    <span class="n">daily</span><span class="p">[</span><span class="s2">&quot;lreturn&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">lreturn</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s2">&quot;B&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
-    <span class="n">daily</span><span class="p">[</span><span class="s2">&quot;returns&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">daily</span><span class="p">[</span><span class="s2">&quot;lreturn&quot;</span><span class="p">])</span> <span class="o">-</span> <span class="mi">1</span>
-    <span class="n">daily</span><span class="p">[</span><span class="s2">&quot;balance&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">daily</span><span class="p">[</span><span class="s2">&quot;returns&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">cumprod</span><span class="p">()</span>
+    <span class="n">daily</span><span class="p">[</span><span class="s2">"lreturn"</span><span class="p">]</span> <span class="o">=</span> <span class="n">lreturn</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s2">"B"</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
+    <span class="n">daily</span><span class="p">[</span><span class="s2">"returns"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">daily</span><span class="p">[</span><span class="s2">"lreturn"</span><span class="p">])</span> <span class="o">-</span> <span class="mi">1</span>
+    <span class="n">daily</span><span class="p">[</span><span class="s2">"balance"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">daily</span><span class="p">[</span><span class="s2">"returns"</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">cumprod</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">daily</span>
 
 
@@ -456,14 +458,14 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">_PerfCalculator</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Internal computation class for orchestrating the :func:`perf` pipeline.</span>
+<span class="w">    </span><span class="sd">"""Internal computation class for orchestrating the :func:`perf` pipeline.</span>
 
 <span class="sd">    This class prepares NumPy arrays from the ``TransactionFrame``, dispatches</span>
 <span class="sd">    them to the appropriate execution engine, and formats the raw trade records</span>
 <span class="sd">    and array responses back into Pyfolio-compatible DataFrames and summary stats.</span>
 
 <span class="sd">    Not part of the public API.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -487,18 +489,18 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">_prepare_arrays</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Extract numpy arrays and compute cost from the transaction frame.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Extract numpy arrays and compute cost from the transaction frame."""</span>
         <span class="n">data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tx</span><span class="o">.</span><span class="n">data</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_slippage</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">:</span>
             <span class="n">cost</span> <span class="o">=</span> <span class="mf">0.0</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="n">min_tick</span> <span class="o">=</span> <span class="n">get_min_tick</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;bar_price&quot;</span><span class="p">])</span>
+            <span class="n">min_tick</span> <span class="o">=</span> <span class="n">get_min_tick</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">"bar_price"</span><span class="p">])</span>
             <span class="n">cost</span> <span class="o">=</span> <span class="n">min_tick</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">_slippage</span>
         <span class="k">return</span> <span class="p">(</span>
-            <span class="n">data</span><span class="p">[</span><span class="s2">&quot;bar_price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
-            <span class="n">data</span><span class="p">[</span><span class="s2">&quot;open_price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
-            <span class="n">data</span><span class="p">[</span><span class="s2">&quot;close_price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
-            <span class="n">data</span><span class="p">[</span><span class="s2">&quot;stop_price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="n">data</span><span class="p">[</span><span class="s2">"bar_price"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="n">data</span><span class="p">[</span><span class="s2">"open_price"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="n">data</span><span class="p">[</span><span class="s2">"close_price"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="n">data</span><span class="p">[</span><span class="s2">"stop_price"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
             <span class="n">cost</span><span class="p">,</span>
         <span class="p">)</span>
 
@@ -514,10 +516,10 @@
         <span class="n">stop_price</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
         <span class="n">cost</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Dispatch to Numba or Python engine.</span>
+<span class="w">        </span><span class="sd">"""Dispatch to Numba or Python engine.</span>
 
 <span class="sd">        Returns (bar_log_returns, bar_net_pnl, trade_records).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">engine</span> <span class="o">=</span> <span class="n">_perf_engine</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_use_numba</span> <span class="k">else</span> <span class="n">_perf_engine_python</span>
         <span class="k">return</span> <span class="n">engine</span><span class="p">(</span><span class="n">bar_price</span><span class="p">,</span> <span class="n">open_price</span><span class="p">,</span> <span class="n">close_price</span><span class="p">,</span> <span class="n">stop_price</span><span class="p">,</span> <span class="n">cost</span><span class="p">)</span>
 
@@ -530,7 +532,7 @@
         <span class="n">trade_records</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
         <span class="n">index</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Convert raw trade records to a per-position DataFrame.</span>
+<span class="w">        </span><span class="sd">"""Convert raw trade records to a per-position DataFrame.</span>
 
 <span class="sd">        trade_records columns (7):</span>
 <span class="sd">            entry_bar, exit_bar, entry_price, exit_price,</span>
@@ -538,17 +540,17 @@
 
 <span class="sd">        Output columns: ``date_o``, ``open``, ``date_c``, ``close``,</span>
 <span class="sd">        ``g_pnl``, ``pnl``, ``duration``.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">trade_records</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
                 <span class="n">columns</span><span class="o">=</span><span class="p">[</span>
-                    <span class="s2">&quot;date_o&quot;</span><span class="p">,</span>
-                    <span class="s2">&quot;open&quot;</span><span class="p">,</span>
-                    <span class="s2">&quot;date_c&quot;</span><span class="p">,</span>
-                    <span class="s2">&quot;close&quot;</span><span class="p">,</span>
-                    <span class="s2">&quot;g_pnl&quot;</span><span class="p">,</span>
-                    <span class="s2">&quot;pnl&quot;</span><span class="p">,</span>
-                    <span class="s2">&quot;duration&quot;</span><span class="p">,</span>
+                    <span class="s2">"date_o"</span><span class="p">,</span>
+                    <span class="s2">"open"</span><span class="p">,</span>
+                    <span class="s2">"date_c"</span><span class="p">,</span>
+                    <span class="s2">"close"</span><span class="p">,</span>
+                    <span class="s2">"g_pnl"</span><span class="p">,</span>
+                    <span class="s2">"pnl"</span><span class="p">,</span>
+                    <span class="s2">"duration"</span><span class="p">,</span>
                 <span class="p">]</span>
             <span class="p">)</span>
 
@@ -561,13 +563,13 @@
 
         <span class="n">positions</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;date_o&quot;</span><span class="p">:</span> <span class="n">index</span><span class="p">[</span><span class="n">entry_bars</span><span class="p">],</span>
-                <span class="s2">&quot;open&quot;</span><span class="p">:</span> <span class="n">entry_prices</span><span class="p">,</span>
-                <span class="s2">&quot;date_c&quot;</span><span class="p">:</span> <span class="n">index</span><span class="p">[</span><span class="n">exit_bars</span><span class="p">],</span>
-                <span class="s2">&quot;close&quot;</span><span class="p">:</span> <span class="n">exit_prices</span><span class="p">,</span>
-                <span class="s2">&quot;g_pnl&quot;</span><span class="p">:</span> <span class="n">gross_pnls</span><span class="p">,</span>
-                <span class="s2">&quot;pnl&quot;</span><span class="p">:</span> <span class="n">gross_pnls</span> <span class="o">-</span> <span class="n">slippages</span><span class="p">,</span>
-                <span class="s2">&quot;duration&quot;</span><span class="p">:</span> <span class="n">index</span><span class="p">[</span><span class="n">exit_bars</span><span class="p">]</span> <span class="o">-</span> <span class="n">index</span><span class="p">[</span><span class="n">entry_bars</span><span class="p">],</span>
+                <span class="s2">"date_o"</span><span class="p">:</span> <span class="n">index</span><span class="p">[</span><span class="n">entry_bars</span><span class="p">],</span>
+                <span class="s2">"open"</span><span class="p">:</span> <span class="n">entry_prices</span><span class="p">,</span>
+                <span class="s2">"date_c"</span><span class="p">:</span> <span class="n">index</span><span class="p">[</span><span class="n">exit_bars</span><span class="p">],</span>
+                <span class="s2">"close"</span><span class="p">:</span> <span class="n">exit_prices</span><span class="p">,</span>
+                <span class="s2">"g_pnl"</span><span class="p">:</span> <span class="n">gross_pnls</span><span class="p">,</span>
+                <span class="s2">"pnl"</span><span class="p">:</span> <span class="n">gross_pnls</span> <span class="o">-</span> <span class="n">slippages</span><span class="p">,</span>
+                <span class="s2">"duration"</span><span class="p">:</span> <span class="n">index</span><span class="p">[</span><span class="n">exit_bars</span><span class="p">]</span> <span class="o">-</span> <span class="n">index</span><span class="p">[</span><span class="n">entry_bars</span><span class="p">],</span>
             <span class="p">}</span>
         <span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
@@ -583,22 +585,22 @@
         <span class="n">bar_net_pnl</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
         <span class="n">cost</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Assemble a bar-level DataFrame.</span>
+<span class="w">        </span><span class="sd">"""Assemble a bar-level DataFrame.</span>
 
-<span class="sd">        Uses the engine&#39;s bar_net_pnl directly (already mark-to-market minus</span>
+<span class="sd">        Uses the engine's bar_net_pnl directly (already mark-to-market minus</span>
 <span class="sd">        slippage) so that df.pnl.sum() == positions.pnl.sum() by construction.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tx</span><span class="o">.</span><span class="n">data</span>
         <span class="n">df</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;lreturn&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bar_log_returns</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"lreturn"</span><span class="p">]</span> <span class="o">=</span> <span class="n">bar_log_returns</span>
         <span class="n">t_count</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;open_price&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
-            <span class="o">+</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;close_price&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
-            <span class="o">+</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;stop_price&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+            <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">"open_price"</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+            <span class="o">+</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">"close_price"</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+            <span class="o">+</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">"stop_price"</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
         <span class="p">)</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;slippage&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">t_count</span> <span class="o">*</span> <span class="n">cost</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bar_net_pnl</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;g_pnl&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;slippage&quot;</span><span class="p">]</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"slippage"</span><span class="p">]</span> <span class="o">=</span> <span class="n">t_count</span> <span class="o">*</span> <span class="n">cost</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"pnl"</span><span class="p">]</span> <span class="o">=</span> <span class="n">bar_net_pnl</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"g_pnl"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"pnl"</span><span class="p">]</span> <span class="o">+</span> <span class="n">df</span><span class="p">[</span><span class="s2">"slippage"</span><span class="p">]</span>
         <span class="k">return</span> <span class="n">df</span>
 
     <span class="c1"># ------------------------------------------------------------------</span>
@@ -612,12 +614,12 @@
         <span class="n">bar_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
         <span class="n">min_tick</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute all statistics.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Compute all statistics."""</span>
         <span class="n">warnings</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_warnings</span>
-        <span class="n">stats</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;O&quot;</span><span class="p">)</span>
+        <span class="n">stats</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="s2">"O"</span><span class="p">)</span>
 
-        <span class="n">win_pos</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">]</span>
-        <span class="n">loss_pos</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">]</span>
+        <span class="n">win_pos</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">"pnl"</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">]</span>
+        <span class="n">loss_pos</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">"pnl"</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">]</span>
 
         <span class="k">try</span><span class="p">:</span>
             <span class="n">num_pos</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span>
@@ -625,95 +627,95 @@
 
             <span class="n">avg_gain</span> <span class="o">=</span> <span class="n">win_pos</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">win_pos</span><span class="p">)</span> <span class="k">else</span> <span class="mf">0.0</span>
             <span class="n">avg_loss</span> <span class="o">=</span> <span class="n">loss_pos</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">loss_pos</span><span class="p">)</span> <span class="k">else</span> <span class="mf">0.0</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Payoff ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="nb">abs</span><span class="p">(</span><span class="n">avg_gain</span> <span class="o">/</span> <span class="n">avg_loss</span><span class="p">)</span> <span class="k">if</span> <span class="n">avg_loss</span> <span class="o">!=</span> <span class="mi">0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Payoff ratio"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="nb">abs</span><span class="p">(</span><span class="n">avg_gain</span> <span class="o">/</span> <span class="n">avg_loss</span><span class="p">)</span> <span class="k">if</span> <span class="n">avg_loss</span> <span class="o">!=</span> <span class="mi">0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
             <span class="p">)</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Profit factor&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Profit factor"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="nb">abs</span><span class="p">(</span><span class="n">win_pos</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">loss_pos</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span>
                 <span class="k">if</span> <span class="n">loss_pos</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">0</span>
-                <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+                <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
             <span class="p">)</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Win ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">win_pos</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_pos</span> <span class="k">if</span> <span class="n">num_pos</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Average gain&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">avg_gain</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Average loss&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">avg_loss</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Position EV&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="k">if</span> <span class="n">num_pos</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Position EV in ticks&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Position EV&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">min_tick</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Win ratio"</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">win_pos</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_pos</span> <span class="k">if</span> <span class="n">num_pos</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Average gain"</span><span class="p">]</span> <span class="o">=</span> <span class="n">avg_gain</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Average loss"</span><span class="p">]</span> <span class="o">=</span> <span class="n">avg_loss</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Position EV"</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="k">if</span> <span class="n">num_pos</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Position EV in ticks"</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="p">[</span><span class="s2">"Position EV"</span><span class="p">]</span> <span class="o">/</span> <span class="n">min_tick</span>
 
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Long EV&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">&quot;open&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Short EV&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">&quot;open&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Long EV"</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">"open"</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Short EV"</span><span class="p">]</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">positions</span><span class="p">[</span><span class="s2">"open"</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
 
-            <span class="n">sorted_gains</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
+            <span class="n">sorted_gains</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">"pnl"</span><span class="p">]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">()</span><span class="o">.</span><span class="n">values</span>
             <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sorted_gains</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="n">total_pnl</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
-                <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Best trade&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sorted_gains</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-                <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Worst trade&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sorted_gains</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-                <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Best trade as </span><span class="si">% o</span><span class="s2">f pnl&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="nb">abs</span><span class="p">(</span><span class="n">sorted_gains</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">total_pnl</span><span class="p">)</span> <span class="k">if</span> <span class="n">total_pnl</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+                <span class="n">total_pnl</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">"pnl"</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+                <span class="n">stats</span><span class="p">[</span><span class="s2">"Best trade"</span><span class="p">]</span> <span class="o">=</span> <span class="n">sorted_gains</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+                <span class="n">stats</span><span class="p">[</span><span class="s2">"Worst trade"</span><span class="p">]</span> <span class="o">=</span> <span class="n">sorted_gains</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="n">stats</span><span class="p">[</span><span class="s2">"Best trade as </span><span class="si">% o</span><span class="s2">f pnl"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="nb">abs</span><span class="p">(</span><span class="n">sorted_gains</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">total_pnl</span><span class="p">)</span> <span class="k">if</span> <span class="n">total_pnl</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
                 <span class="p">)</span>
-                <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Worst trade as </span><span class="si">% o</span><span class="s2">f pnl&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="nb">abs</span><span class="p">(</span><span class="n">sorted_gains</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="n">total_pnl</span><span class="p">)</span> <span class="k">if</span> <span class="n">total_pnl</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+                <span class="n">stats</span><span class="p">[</span><span class="s2">"Worst trade as </span><span class="si">% o</span><span class="s2">f pnl"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="nb">abs</span><span class="p">(</span><span class="n">sorted_gains</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="n">total_pnl</span><span class="p">)</span> <span class="k">if</span> <span class="n">total_pnl</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
                 <span class="p">)</span>
 
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Positions per day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">num_pos</span> <span class="o">/</span> <span class="n">days</span> <span class="k">if</span> <span class="n">days</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Days per position&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">days</span> <span class="o">/</span> <span class="n">num_pos</span> <span class="k">if</span> <span class="n">num_pos</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Positions per day"</span><span class="p">]</span> <span class="o">=</span> <span class="n">num_pos</span> <span class="o">/</span> <span class="n">days</span> <span class="k">if</span> <span class="n">days</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Days per position"</span><span class="p">]</span> <span class="o">=</span> <span class="n">days</span> <span class="o">/</span> <span class="n">num_pos</span> <span class="k">if</span> <span class="n">num_pos</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
 
-            <span class="n">duration</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">&quot;duration&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Actual avg. duration&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">duration</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="s2">&quot;min&quot;</span><span class="p">)</span>
+            <span class="n">duration</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">"duration"</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Actual avg. duration"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">duration</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="s2">"min"</span><span class="p">)</span>
                 <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">duration</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">)</span>
                 <span class="k">else</span> <span class="n">duration</span>
             <span class="p">)</span>
 
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Days&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">days</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Positions&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">num_pos</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Monthly EV&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Positions per day&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Position EV&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="mi">21</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Annual EV&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">12</span> <span class="o">*</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Monthly EV&quot;</span><span class="p">]</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Days"</span><span class="p">]</span> <span class="o">=</span> <span class="n">days</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Positions"</span><span class="p">]</span> <span class="o">=</span> <span class="n">num_pos</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Monthly EV"</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="p">[</span><span class="s2">"Positions per day"</span><span class="p">]</span> <span class="o">*</span> <span class="n">stats</span><span class="p">[</span><span class="s2">"Position EV"</span><span class="p">]</span> <span class="o">*</span> <span class="mi">21</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Annual EV"</span><span class="p">]</span> <span class="o">=</span> <span class="mi">12</span> <span class="o">*</span> <span class="n">stats</span><span class="p">[</span><span class="s2">"Monthly EV"</span><span class="p">]</span>
         <span class="k">except</span> <span class="p">(</span><span class="ne">KeyError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">,</span> <span class="ne">ZeroDivisionError</span><span class="p">)</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
             <span class="n">warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
 
         <span class="c1"># Pyfolio stats</span>
-        <span class="n">pyfolio_stats</span> <span class="o">=</span> <span class="n">perf_stats</span><span class="p">(</span><span class="n">daily</span><span class="p">[</span><span class="s2">&quot;returns&quot;</span><span class="p">])</span>
+        <span class="n">pyfolio_stats</span> <span class="o">=</span> <span class="n">perf_stats</span><span class="p">(</span><span class="n">daily</span><span class="p">[</span><span class="s2">"returns"</span><span class="p">])</span>
 
-        <span class="n">price</span> <span class="o">=</span> <span class="n">bar_df</span><span class="p">[</span><span class="s2">&quot;bar_price&quot;</span><span class="p">]</span>
-        <span class="n">bar_pnl_sum</span> <span class="o">=</span> <span class="n">bar_df</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="n">price</span> <span class="o">=</span> <span class="n">bar_df</span><span class="p">[</span><span class="s2">"bar_price"</span><span class="p">]</span>
+        <span class="n">bar_pnl_sum</span> <span class="o">=</span> <span class="n">bar_df</span><span class="p">[</span><span class="s2">"pnl"</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
         <span class="n">year_frac</span> <span class="o">=</span> <span class="p">(</span><span class="n">bar_df</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">bar_df</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">/</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">365</span><span class="p">)</span>
 
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Simple annual return&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="p">(</span><span class="n">bar_pnl_sum</span> <span class="o">/</span> <span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">/</span> <span class="n">year_frac</span> <span class="k">if</span> <span class="n">year_frac</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Simple annual return"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">(</span><span class="n">bar_pnl_sum</span> <span class="o">/</span> <span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">/</span> <span class="n">year_frac</span> <span class="k">if</span> <span class="n">year_frac</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
         <span class="p">)</span>
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Sum of returns annualised&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">daily</span><span class="p">[</span><span class="s2">&quot;returns&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">year_frac</span> <span class="k">if</span> <span class="n">year_frac</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Sum of returns annualised"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">daily</span><span class="p">[</span><span class="s2">"returns"</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">year_frac</span> <span class="k">if</span> <span class="n">year_frac</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
         <span class="p">)</span>
 
         <span class="k">def</span><span class="w"> </span><span class="nf">efficiency</span><span class="p">(</span><span class="n">strategy_return</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
             <span class="n">mkt</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
-            <span class="k">return</span> <span class="n">strategy_return</span> <span class="o">/</span> <span class="n">mkt</span> <span class="k">if</span> <span class="n">mkt</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">strategy_return</span> <span class="o">/</span> <span class="n">mkt</span> <span class="k">if</span> <span class="n">mkt</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
 
         <span class="k">def</span><span class="w"> </span><span class="nf">efficiency_1</span><span class="p">(</span><span class="n">strategy_return</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
             <span class="c1"># Fixed from max/min to max/min - 1 (perfect buy-low sell-high return)</span>
             <span class="n">mkt</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">price</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">/</span> <span class="n">price</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
-            <span class="k">return</span> <span class="n">strategy_return</span> <span class="o">/</span> <span class="n">mkt</span> <span class="k">if</span> <span class="n">mkt</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">strategy_return</span> <span class="o">/</span> <span class="n">mkt</span> <span class="k">if</span> <span class="n">mkt</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
 
         <span class="k">def</span><span class="w"> </span><span class="nf">efficiency_2</span><span class="p">(</span><span class="n">strategy_return</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
             <span class="n">mkt</span> <span class="o">=</span> <span class="n">price</span><span class="o">.</span><span class="n">pct_change</span><span class="p">()</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
-            <span class="k">return</span> <span class="n">strategy_return</span> <span class="o">/</span> <span class="n">mkt</span> <span class="k">if</span> <span class="n">mkt</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">strategy_return</span> <span class="o">/</span> <span class="n">mkt</span> <span class="k">if</span> <span class="n">mkt</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
 
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Efficiency&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency</span><span class="p">(</span><span class="n">pyfolio_stats</span><span class="p">[</span><span class="s2">&quot;Cumulative returns&quot;</span><span class="p">])</span>
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Efficiency (Simple)&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency</span><span class="p">(</span><span class="n">bar_pnl_sum</span> <span class="o">/</span> <span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Efficiency_1 (Max/Min)&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency_1</span><span class="p">(</span>
-            <span class="n">pyfolio_stats</span><span class="p">[</span><span class="s2">&quot;Cumulative returns&quot;</span><span class="p">]</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Efficiency"</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency</span><span class="p">(</span><span class="n">pyfolio_stats</span><span class="p">[</span><span class="s2">"Cumulative returns"</span><span class="p">])</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Efficiency (Simple)"</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency</span><span class="p">(</span><span class="n">bar_pnl_sum</span> <span class="o">/</span> <span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Efficiency_1 (Max/Min)"</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency_1</span><span class="p">(</span>
+            <span class="n">pyfolio_stats</span><span class="p">[</span><span class="s2">"Cumulative returns"</span><span class="p">]</span>
         <span class="p">)</span>
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Efficiency_2 (Path Length)&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency_2</span><span class="p">(</span>
-            <span class="n">pyfolio_stats</span><span class="p">[</span><span class="s2">&quot;Cumulative returns&quot;</span><span class="p">]</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Efficiency_2 (Path Length)"</span><span class="p">]</span> <span class="o">=</span> <span class="n">efficiency_2</span><span class="p">(</span>
+            <span class="n">pyfolio_stats</span><span class="p">[</span><span class="s2">"Cumulative returns"</span><span class="p">]</span>
         <span class="p">)</span>
 
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Position Sharpe&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Position EV&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">positions</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">std</span><span class="p">()</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Position Sharpe"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Position EV"</span><span class="p">]</span> <span class="o">/</span> <span class="n">positions</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">std</span><span class="p">()</span>
             <span class="k">if</span> <span class="n">positions</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">0</span>
-            <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+            <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
         <span class="p">)</span>
-        <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Annualized position Sharpe&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Position Sharpe&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span>
-            <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;Positions per day&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="mi">252</span>
+        <span class="n">stats</span><span class="p">[</span><span class="s2">"Annualized position Sharpe"</span><span class="p">]</span> <span class="o">=</span> <span class="n">stats</span><span class="p">[</span><span class="s2">"Position Sharpe"</span><span class="p">]</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span>
+            <span class="n">stats</span><span class="p">[</span><span class="s2">"Positions per day"</span><span class="p">]</span> <span class="o">*</span> <span class="mi">252</span>
         <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">pyfolio_stats</span><span class="p">,</span> <span class="n">stats</span><span class="p">])</span>
@@ -723,22 +725,22 @@
     <span class="c1"># ------------------------------------------------------------------</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_duration_warning</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">positions</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">bar_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Append duration warnings to self._warnings.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Append duration warnings to self._warnings."""</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">return</span>
         <span class="n">indices</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
-            <span class="p">{</span><span class="s2">&quot;n&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">bar_df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)},</span> <span class="n">index</span><span class="o">=</span><span class="n">bar_df</span><span class="o">.</span><span class="n">index</span>
+            <span class="p">{</span><span class="s2">"n"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">bar_df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)},</span> <span class="n">index</span><span class="o">=</span><span class="n">bar_df</span><span class="o">.</span><span class="n">index</span>
         <span class="p">)</span>
-        <span class="n">locs</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[[</span><span class="s2">&quot;date_o&quot;</span><span class="p">,</span> <span class="s2">&quot;date_c&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
-        <span class="n">locs</span><span class="p">[</span><span class="s2">&quot;i_o&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">indices</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">locs</span><span class="p">[</span><span class="s2">&quot;date_o&quot;</span><span class="p">],</span> <span class="s2">&quot;n&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-        <span class="n">locs</span><span class="p">[</span><span class="s2">&quot;i_c&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">indices</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">locs</span><span class="p">[</span><span class="s2">&quot;date_c&quot;</span><span class="p">],</span> <span class="s2">&quot;n&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-        <span class="n">locs</span><span class="p">[</span><span class="s2">&quot;dur&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">locs</span><span class="p">[</span><span class="s2">&quot;i_c&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">locs</span><span class="p">[</span><span class="s2">&quot;i_o&quot;</span><span class="p">]</span>
+        <span class="n">locs</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[[</span><span class="s2">"date_o"</span><span class="p">,</span> <span class="s2">"date_c"</span><span class="p">]]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">locs</span><span class="p">[</span><span class="s2">"i_o"</span><span class="p">]</span> <span class="o">=</span> <span class="n">indices</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">locs</span><span class="p">[</span><span class="s2">"date_o"</span><span class="p">],</span> <span class="s2">"n"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+        <span class="n">locs</span><span class="p">[</span><span class="s2">"i_c"</span><span class="p">]</span> <span class="o">=</span> <span class="n">indices</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">locs</span><span class="p">[</span><span class="s2">"date_c"</span><span class="p">],</span> <span class="s2">"n"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+        <span class="n">locs</span><span class="p">[</span><span class="s2">"dur"</span><span class="p">]</span> <span class="o">=</span> <span class="n">locs</span><span class="p">[</span><span class="s2">"i_c"</span><span class="p">]</span> <span class="o">-</span> <span class="n">locs</span><span class="p">[</span><span class="s2">"i_o"</span><span class="p">]</span>
         <span class="n">total</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">locs</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">):</span>
-            <span class="n">frac</span> <span class="o">=</span> <span class="p">(</span><span class="n">locs</span><span class="p">[</span><span class="s2">&quot;dur&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">d</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">total</span>
+            <span class="n">frac</span> <span class="o">=</span> <span class="p">(</span><span class="n">locs</span><span class="p">[</span><span class="s2">"dur"</span><span class="p">]</span> <span class="o">==</span> <span class="n">d</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">total</span>
             <span class="k">if</span> <span class="n">frac</span> <span class="o">&gt;</span> <span class="mf">0.05</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Warning: </span><span class="si">{</span><span class="n">frac</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> positions with duration of </span><span class="si">{</span><span class="n">d</span><span class="si">}</span><span class="s2"> candle.&quot;</span>
+                    <span class="sa">f</span><span class="s2">"Warning: </span><span class="si">{</span><span class="n">frac</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> positions with duration of </span><span class="si">{</span><span class="n">d</span><span class="si">}</span><span class="s2"> candle."</span>
                 <span class="p">)</span>
 
     <span class="c1"># ------------------------------------------------------------------</span>
@@ -747,22 +749,22 @@
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_last_open_warning</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">positions</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;No positions&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"No positions"</span><span class="p">)</span>
             <span class="k">return</span>
         <span class="n">total_pnl</span> <span class="o">=</span> <span class="n">positions</span><span class="o">.</span><span class="n">pnl</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
         <span class="k">if</span> <span class="n">total_pnl</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">return</span>
         <span class="n">pnl_frac</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">positions</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">pnl</span> <span class="o">/</span> <span class="n">total_pnl</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">pnl_frac</span> <span class="o">&gt;</span> <span class="mf">0.3</span><span class="p">:</span>
-            <span class="n">durations</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">&quot;date_c&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">positions</span><span class="p">[</span><span class="s2">&quot;date_o&quot;</span><span class="p">]</span>
+            <span class="n">durations</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="s2">"date_c"</span><span class="p">]</span> <span class="o">-</span> <span class="n">positions</span><span class="p">[</span><span class="s2">"date_o"</span><span class="p">]</span>
             <span class="n">avg</span> <span class="o">=</span> <span class="n">durations</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
             <span class="n">last</span> <span class="o">=</span> <span class="n">durations</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
             <span class="n">mean_time_frac</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">last</span> <span class="o">/</span> <span class="n">avg</span> <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">avg</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+                <span class="n">last</span> <span class="o">/</span> <span class="n">avg</span> <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">avg</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
             <span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Warning: last open position represents </span><span class="si">{</span><span class="n">pnl_frac</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> of total pnl &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;and is </span><span class="si">{</span><span class="n">mean_time_frac</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">x average duration (</span><span class="si">{</span><span class="n">last</span><span class="si">}</span><span class="s2"> vs </span><span class="si">{</span><span class="n">avg</span><span class="si">}</span><span class="s2">)&quot;</span>
+                <span class="sa">f</span><span class="s2">"Warning: last open position represents </span><span class="si">{</span><span class="n">pnl_frac</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> of total pnl "</span>
+                <span class="sa">f</span><span class="s2">"and is </span><span class="si">{</span><span class="n">mean_time_frac</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">x average duration (</span><span class="si">{</span><span class="n">last</span><span class="si">}</span><span class="s2"> vs </span><span class="si">{</span><span class="n">avg</span><span class="si">}</span><span class="s2">)"</span>
             <span class="p">)</span>
 
     <span class="c1"># ------------------------------------------------------------------</span>
@@ -770,12 +772,12 @@
     <span class="c1"># ------------------------------------------------------------------</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Results</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Execute the complete performance evaluation pipeline.</span>
+<span class="w">        </span><span class="sd">"""Execute the complete performance evaluation pipeline.</span>
 
 <span class="sd">        Returns:</span>
 <span class="sd">            Results: A named tuple containing stats, daily returns, positions,</span>
 <span class="sd">            the modified bar DataFrame, and any raised warnings.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_tx</span><span class="o">.</span><span class="n">data</span>
 
         <span class="n">bar_price</span><span class="p">,</span> <span class="n">open_price</span><span class="p">,</span> <span class="n">close_price</span><span class="p">,</span> <span class="n">stop_price</span><span class="p">,</span> <span class="n">cost</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prepare_arrays</span><span class="p">()</span>
@@ -789,19 +791,19 @@
 
         <span class="n">bar_df</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_bar_df</span><span class="p">(</span><span class="n">bar_log_returns</span><span class="p">,</span> <span class="n">bar_net_pnl</span><span class="p">,</span> <span class="n">cost</span><span class="p">)</span>
 
-        <span class="c1"># skip_last_open: if the last trade&#39;s exit_bar == last bar index and</span>
+        <span class="c1"># skip_last_open: if the last trade's exit_bar == last bar index and</span>
         <span class="c1"># position was still open, exclude it from stats.</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_skip_last_open</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
             <span class="n">last_exit</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">trade_records</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">])]</span>
             <span class="n">last_bar</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-            <span class="k">if</span> <span class="n">last_exit</span> <span class="o">==</span> <span class="n">last_bar</span> <span class="ow">and</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;position&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">last_exit</span> <span class="o">==</span> <span class="n">last_bar</span> <span class="ow">and</span> <span class="n">data</span><span class="p">[</span><span class="s2">"position"</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
                 <span class="n">positions</span> <span class="o">=</span> <span class="n">positions</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
                 <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-                    <span class="n">bar_df</span> <span class="o">=</span> <span class="n">bar_df</span><span class="o">.</span><span class="n">loc</span><span class="p">[:</span> <span class="n">positions</span><span class="p">[</span><span class="s2">&quot;date_c&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]]</span>
+                    <span class="n">bar_df</span> <span class="o">=</span> <span class="n">bar_df</span><span class="o">.</span><span class="n">loc</span><span class="p">[:</span> <span class="n">positions</span><span class="p">[</span><span class="s2">"date_c"</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]]</span>
                 <span class="k">else</span><span class="p">:</span>
                     <span class="n">bar_df</span> <span class="o">=</span> <span class="n">bar_df</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="mi">0</span><span class="p">]</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;No positions&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"No positions"</span><span class="p">)</span>
         <span class="k">elif</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_skip_last_open</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_last_open_warning</span><span class="p">(</span><span class="n">positions</span><span class="p">)</span>
 
@@ -834,7 +836,7 @@
     <span class="n">raise_exceptions</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">use_numba</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Results</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return performance statistics for a strategy.</span>
+<span class="w">    </span><span class="sd">"""Return performance statistics for a strategy.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        data:             Output of :func:`no_stop` or</span>
@@ -853,7 +855,7 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        :class:`Results` NamedTuple.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">tx</span> <span class="o">=</span> <span class="n">_TransactionFrame</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">_PerfCalculator</span><span class="p">(</span>
         <span class="n">tx</span><span class="p">,</span> <span class="n">slippage</span><span class="p">,</span> <span class="n">skip_last_open</span><span class="p">,</span> <span class="n">raise_exceptions</span><span class="p">,</span> <span class="n">use_numba</span>
@@ -865,13 +867,13 @@
 <a class="viewcode-back" href="../../../../research/backtester.html#haymaker.research.auto_perf">[docs]</a>
 <span class="k">def</span><span class="w"> </span><span class="nf">auto_perf</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
-    <span class="n">price_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;open&quot;</span><span class="p">,</span>
+    <span class="n">price_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"open"</span><span class="p">,</span>
     <span class="n">slippage</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.5</span><span class="p">,</span>
     <span class="n">skip_last_open</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">raise_exceptions</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">use_numba</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Results</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return performance statistics, converting raw signals if needed.</span>
+<span class="w">    </span><span class="sd">"""Return performance statistics, converting raw signals if needed.</span>
 
 <span class="sd">    This is a convenience wrapper around :func:`perf` for notebook and</span>
 <span class="sd">    exploratory workflows.  It first checks whether ``data`` already satisfies</span>
@@ -897,7 +899,7 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        :class:`Results` NamedTuple.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="n">_TransactionFrame</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
     <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">transaction_error</span><span class="p">:</span>
@@ -911,10 +913,10 @@
             <span class="p">)</span>
         <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">no_stop_error</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;auto_perf() could not interpret data as a transaction frame &quot;</span>
-                <span class="s2">&quot;or convert it with no_stop(). &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;Transaction-frame error: </span><span class="si">{</span><span class="n">transaction_error</span><span class="si">}</span><span class="s2">. &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;no_stop error: </span><span class="si">{</span><span class="n">no_stop_error</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="s2">"auto_perf() could not interpret data as a transaction frame "</span>
+                <span class="s2">"or convert it with no_stop(). "</span>
+                <span class="sa">f</span><span class="s2">"Transaction-frame error: </span><span class="si">{</span><span class="n">transaction_error</span><span class="si">}</span><span class="s2">. "</span>
+                <span class="sa">f</span><span class="s2">"no_stop error: </span><span class="si">{</span><span class="n">no_stop_error</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">no_stop_error</span>
 
     <span class="k">return</span> <span class="n">perf</span><span class="p">(</span>

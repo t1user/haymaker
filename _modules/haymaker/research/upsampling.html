@@ -197,6 +197,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -248,14 +250,14 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for haymaker.research.upsampling</h1><div class="highlight"><pre>
-<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span></span><span class="sd">"""</span>
 <span class="sd">Utilities for aligning low-frequency research signals to high-frequency bars.</span>
 
 <span class="sd">This module preserves the timing semantics used by the research backtester:</span>
 <span class="sd">low-frequency values are made available only when their source bar is known,</span>
 <span class="sd">ordinary values are propagated from that point, and event-like columns can be</span>
 <span class="sd">kept sparse. The public entry point is :func:`upsample`.</span>
-<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">"""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -267,7 +269,7 @@
 
 <span class="n">SparseColumns</span> <span class="o">=</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span>
 
-<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;upsample&quot;</span><span class="p">]</span>
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"upsample"</span><span class="p">]</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_as_unique_columns</span><span class="p">(</span><span class="n">columns</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
@@ -300,7 +302,7 @@
     <span class="n">unknown</span> <span class="o">=</span> <span class="p">[</span><span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">sparse_columns</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">upsampled_columns</span><span class="p">]</span>
     <span class="k">if</span> <span class="n">unknown</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Cannot upsample sparse columns: </span><span class="si">{</span><span class="n">unknown</span><span class="si">}</span><span class="s2"> - not in columns.&quot;</span>
+            <span class="sa">f</span><span class="s2">"Cannot upsample sparse columns: </span><span class="si">{</span><span class="n">unknown</span><span class="si">}</span><span class="s2"> - not in columns."</span>
         <span class="p">)</span>
     <span class="k">return</span> <span class="n">sparse_columns</span>
 
@@ -308,14 +310,14 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_validate_indexes</span><span class="p">(</span>
     <span class="n">hf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">lf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
-    <span class="n">label</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;left&quot;</span><span class="p">,</span> <span class="s2">&quot;right&quot;</span><span class="p">],</span>
+    <span class="n">label</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"left"</span><span class="p">,</span> <span class="s2">"right"</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">hf_df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">is_monotonic_increasing</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Higher frequency dataframe index must be sorted.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Higher frequency dataframe index must be sorted."</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">is_monotonic_increasing</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Lower frequency dataframe index must be sorted.&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">label</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;left&quot;</span><span class="p">,</span> <span class="s2">&quot;right&quot;</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;label must be &#39;left&#39; or &#39;right&#39;, &#39;</span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">&#39; given&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Lower frequency dataframe index must be sorted."</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">label</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"left"</span><span class="p">,</span> <span class="s2">"right"</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"label must be 'left' or 'right', '</span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">' given"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_align_left_labeled</span><span class="p">(</span>
@@ -324,7 +326,7 @@
     <span class="n">high_locs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">low_index</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">low_index</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
         <span class="n">high_locs</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">high_index</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">low_index</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+            <span class="n">high_index</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">low_index</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">side</span><span class="o">=</span><span class="s2">"left"</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
         <span class="p">)</span>
     <span class="n">high_locs</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">high_index</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
     <span class="n">rows</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">low_index</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
@@ -339,7 +341,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_align_right_labeled</span><span class="p">(</span>
     <span class="n">high_index</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">,</span> <span class="n">low_index</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Index</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-    <span class="n">high_locs</span> <span class="o">=</span> <span class="n">high_index</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">low_index</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;right&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+    <span class="n">high_locs</span> <span class="o">=</span> <span class="n">high_index</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">low_index</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">side</span><span class="o">=</span><span class="s2">"right"</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
     <span class="n">rows</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">low_index</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
     <span class="n">valid</span> <span class="o">=</span> <span class="p">(</span>
         <span class="p">(</span><span class="n">low_index</span> <span class="o">&gt;=</span> <span class="n">high_index</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
@@ -353,11 +355,11 @@
     <span class="n">hf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">lf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">upsampled_columns</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-    <span class="n">label</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;left&quot;</span><span class="p">,</span> <span class="s2">&quot;right&quot;</span><span class="p">],</span>
+    <span class="n">label</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"left"</span><span class="p">,</span> <span class="s2">"right"</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Align lower-frequency rows to the high-frequency row where they are known.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">_validate_indexes</span><span class="p">(</span><span class="n">hf_df</span><span class="p">,</span> <span class="n">lf_df</span><span class="p">,</span> <span class="n">label</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">upsampled_columns</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">lf_df</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="n">upsampled_columns</span><span class="p">)]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="mi">0</span><span class="p">]</span>
@@ -367,7 +369,7 @@
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">high_index</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">low_index</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">lf_df</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="n">upsampled_columns</span><span class="p">)]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="mi">0</span><span class="p">]</span>
 
-    <span class="k">if</span> <span class="n">label</span> <span class="o">==</span> <span class="s2">&quot;left&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">label</span> <span class="o">==</span> <span class="s2">"left"</span><span class="p">:</span>
         <span class="n">rows</span><span class="p">,</span> <span class="n">high_locs</span> <span class="o">=</span> <span class="n">_align_left_labeled</span><span class="p">(</span><span class="n">high_index</span><span class="p">,</span> <span class="n">low_index</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">rows</span><span class="p">,</span> <span class="n">high_locs</span> <span class="o">=</span> <span class="n">_align_right_labeled</span><span class="p">(</span><span class="n">high_index</span><span class="p">,</span> <span class="n">low_index</span><span class="p">)</span>
@@ -376,43 +378,43 @@
     <span class="n">aligned</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">high_index</span><span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="n">high_locs</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">aligned</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">has_duplicates</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;Cannot upsample: multiple lower-frequency rows align to the &quot;</span>
-            <span class="s2">&quot;same higher-frequency index point.&quot;</span>
+            <span class="s2">"Cannot upsample: multiple lower-frequency rows align to the "</span>
+            <span class="s2">"same higher-frequency index point."</span>
         <span class="p">)</span>
     <span class="k">return</span> <span class="n">aligned</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_validate_lower_frequency_values</span><span class="p">(</span><span class="n">lf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">if</span> <span class="s2">&quot;position&quot;</span> <span class="ow">in</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+    <span class="k">if</span> <span class="s2">"position"</span> <span class="ow">in</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;Cannot upsample &#39;position&#39;. Position is already executable state; &quot;</span>
-            <span class="s2">&quot;upsample generated signals or blips first, then derive position on &quot;</span>
-            <span class="s2">&quot;the upsampled dataframe.&quot;</span>
+            <span class="s2">"Cannot upsample 'position'. Position is already executable state; "</span>
+            <span class="s2">"upsample generated signals or blips first, then derive position on "</span>
+            <span class="s2">"the upsampled dataframe."</span>
         <span class="p">)</span>
 
     <span class="n">position_like_columns</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="s2">&quot;position&quot;</span> <span class="ow">in</span> <span class="n">column</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="s2">"position"</span> <span class="ow">in</span> <span class="n">column</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
     <span class="p">]</span>
     <span class="k">if</span> <span class="n">position_like_columns</span><span class="p">:</span>
         <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-            <span class="s2">&quot;Columns containing &#39;position&#39; are not treated as executable state by &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;upsample: </span><span class="si">{</span><span class="n">position_like_columns</span><span class="si">}</span><span class="s2">. Ensure these are generated &quot;</span>
-            <span class="s2">&quot;values, not already-shifted positions.&quot;</span><span class="p">,</span>
+            <span class="s2">"Columns containing 'position' are not treated as executable state by "</span>
+            <span class="sa">f</span><span class="s2">"upsample: </span><span class="si">{</span><span class="n">position_like_columns</span><span class="si">}</span><span class="s2">. Ensure these are generated "</span>
+            <span class="s2">"values, not already-shifted positions."</span><span class="p">,</span>
             <span class="ne">UserWarning</span><span class="p">,</span>
             <span class="n">stacklevel</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
         <span class="p">)</span>
 
     <span class="k">if</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Lower frequency dataframe (lf_df) must not have n/a values.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Lower frequency dataframe (lf_df) must not have n/a values."</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_raw_blip_map</span><span class="p">(</span>
     <span class="n">hf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">lf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">blip_columns</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
     <span class="k">return</span> <span class="p">{</span>
-        <span class="n">column</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;raw_</span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="n">column</span><span class="p">:</span> <span class="sa">f</span><span class="s2">"raw_</span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">"</span>
         <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">blip_columns</span>
-        <span class="k">if</span> <span class="sa">f</span><span class="s2">&quot;raw_</span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">hf_df</span><span class="o">.</span><span class="n">columns</span> <span class="ow">and</span> <span class="sa">f</span><span class="s2">&quot;raw_</span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">columns</span>
+        <span class="k">if</span> <span class="sa">f</span><span class="s2">"raw_</span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">hf_df</span><span class="o">.</span><span class="n">columns</span> <span class="ow">and</span> <span class="sa">f</span><span class="s2">"raw_</span><span class="si">{</span><span class="n">column</span><span class="si">}</span><span class="s2">"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">columns</span>
     <span class="p">}</span>
 
 
@@ -438,10 +440,10 @@
     <span class="n">hf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">lf_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
-    <span class="n">label</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;left&quot;</span><span class="p">,</span> <span class="s2">&quot;right&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;left&quot;</span><span class="p">,</span>
+    <span class="n">label</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"left"</span><span class="p">,</span> <span class="s2">"right"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"left"</span><span class="p">,</span>
     <span class="n">sparse</span><span class="p">:</span> <span class="n">SparseColumns</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Upsample time series by combining high-frequency and low-frequency data.</span>
 
 <span class="sd">    Args:</span>
@@ -451,9 +453,9 @@
 <span class="sd">            here because it is already executable state; upsample generated</span>
 <span class="sd">            signals or blips first, then derive ``position`` on the upsampled</span>
 <span class="sd">            frame.</span>
-<span class="sd">        label: How ``lf_df`` is labeled. ``&quot;left&quot;`` means each low-frequency</span>
+<span class="sd">        label: How ``lf_df`` is labeled. ``"left"`` means each low-frequency</span>
 <span class="sd">            row is labeled by the first high-frequency bar in its group.</span>
-<span class="sd">            ``&quot;right&quot;`` means it is labeled by the bar where the</span>
+<span class="sd">            ``"right"`` means it is labeled by the bar where the</span>
 <span class="sd">            low-frequency value becomes known. Values are first aligned to the</span>
 <span class="sd">            high-frequency index point where they become known.</span>
 <span class="sd">        sparse: Optional column or columns that should remain sparse events</span>
@@ -471,18 +473,18 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        ``hf_df`` plus aligned low-frequency columns. Ordinary low-frequency</span>
 <span class="sd">        columns are forward-filled from their availability point onward.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">_validate_lower_frequency_values</span><span class="p">(</span><span class="n">lf_df</span><span class="p">)</span>
 
     <span class="n">upsampled_columns</span> <span class="o">=</span> <span class="p">[</span>
         <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">lf_df</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">hf_df</span><span class="o">.</span><span class="n">columns</span>
     <span class="p">]</span>
     <span class="n">blip_columns</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;blip&quot;</span><span class="p">,</span> <span class="s2">&quot;close_blip&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">upsampled_columns</span>
+        <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"blip"</span><span class="p">,</span> <span class="s2">"close_blip"</span><span class="p">)</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">upsampled_columns</span>
     <span class="p">]</span>
     <span class="n">raw_source_columns</span> <span class="o">=</span> <span class="p">[</span>
         <span class="n">column</span>
-        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;raw_blip&quot;</span><span class="p">,</span> <span class="s2">&quot;raw_close_blip&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"raw_blip"</span><span class="p">,</span> <span class="s2">"raw_close_blip"</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">upsampled_columns</span>
     <span class="p">]</span>
     <span class="n">raw_column_map</span> <span class="o">=</span> <span class="n">_raw_blip_map</span><span class="p">(</span><span class="n">hf_df</span><span class="p">,</span> <span class="n">lf_df</span><span class="p">,</span> <span class="n">blip_columns</span><span class="p">)</span>

@@ -50,6 +50,35 @@ Building on :class:`haymaker.base.Atom`, Haymaker offers skeletons of several co
 
 Below is a review of how to use pre-built component modules:
 
+Dataframe Persistence
+---------------------
+
+Configure dataframe persistence while building the strategy module. Use
+``base.Atom.runtime.frame_store_provider`` and supply the Arctic library name
+and symbol-naming policy for each datastore.
+
+Choose the provider method according to how the datastore will be used:
+
+``datastore()``
+   Use the returned :class:`haymaker.datastore.AsyncDataStore` with
+   :class:`haymaker.streamers.HistoricalDataStreamer` and
+   :class:`haymaker.dfaggregator.DfAggregator`. Its methods are asynchronous;
+   after a mutation returns from ``await``, the datastore operation has
+   completed and any failure has been reported at that call.
+
+``queued_sink()``
+   Use the returned :class:`haymaker.datastore.QueuedDataSink` for optional
+   dataframe-block output. Its ``enqueue_*`` methods return after accepting the
+   write rather than after saving it. These writes are best-effort and pending
+   writes may be discarded during shutdown.
+
+Choose the symbol namer when constructing each store. Use
+:class:`haymaker.datastore.BarSizeSymbolNamer` for market data shared by a
+streamer and aggregator, and :class:`haymaker.datastore.StrategySymbolNamer`
+for strategy block output. Naming cannot be changed after construction, so
+create a separate store for every distinct naming policy, even when the stores
+use the same Arctic library.
+
 Streamer
 --------
 
@@ -79,6 +108,32 @@ Every implementation accepts the same arguments as the respective `ib_insync` me
 
 .. autoclass:: haymaker.streamers.HistoricalDataStreamer
    :members:
+
+To make historical startup incremental, construct one bar-size-configured
+datastore during strategy composition and inject it into the streamer. The
+same datastore can be shared with a :class:`haymaker.dfaggregator.DfAggregator`
+using the same bar size:
+
+.. code-block:: python
+
+   from haymaker import base, dfaggregator, streamers
+   from haymaker.datastore import BarSizeSymbolNamer
+
+   market_data = base.Atom.runtime.frame_store_provider.datastore(
+       "market_data",
+       symbol_namer=BarSizeSymbolNamer("30 secs"),
+   )
+   source = streamers.HistoricalDataStreamer(
+       contract,
+       "10 D",
+       "30 secs",
+       "TRADES",
+       datastore=market_data,
+   )
+   aggregator = dfaggregator.DfAggregator(datastore=market_data)
+
+When ``datastore`` is ``None``, the streamer requests history without reading a
+saved boundary. Boolean datastore shortcuts are not supported.
 
 .. autoclass:: haymaker.streamers.MktDataStreamer
    :members:
@@ -126,6 +181,37 @@ Implementations
    :members:
 
 Override :meth:`haymaker.block.AbstractDfBlock.df` when creating a concrete `AbstractDfBlock`.
+
+Pass a fully configured :class:`haymaker.datastore.QueuedDataSink` through the
+keyword-only ``datastore`` argument when a block needs an explicit persistence
+dependency. Configure its symbol naming when constructing the store, for
+example with :class:`haymaker.datastore.StrategySymbolNamer`; blocks
+do not mutate injected stores. Construct the sink from
+``base.Atom.runtime.frame_store_provider`` while composing the strategy module.
+When ``datastore`` is omitted, block persistence is disabled.
+
+For example, a strategy module can define a small helper and use one configured
+sink per block:
+
+.. code-block:: python
+
+   from haymaker import base
+   from haymaker.datastore import QueuedDataSink, StrategySymbolNamer
+
+   def block_store(strategy: str) -> QueuedDataSink:
+       return base.Atom.runtime.frame_store_provider.queued_sink(
+           "block_data",
+           symbol_namer=StrategySymbolNamer(strategy),
+       )
+
+   block = MyDataframeBlock(
+       strategy="momentum_ES",
+       contract=contract,
+       datastore=block_store("momentum_ES"),
+   )
+
+Here ``MyDataframeBlock`` represents the strategy's concrete
+:class:`haymaker.block.AbstractDfBlock` subclass.
 
 Signal Processor
 ----------------

@@ -198,6 +198,8 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -272,15 +274,19 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#precedence">Precedence</a></li>
 <li class="toctree-l2"><a class="reference internal" href="configuration.html#default-configuration-files">Default Configuration Files</a></li>
-<li class="toctree-l2"><a class="reference internal" href="configuration.html#user-provided-configuration-file">User-Provided Configuration File</a></li>
-<li class="toctree-l2"><a class="reference internal" href="configuration.html#environment-variables">Environment Variables</a></li>
-<li class="toctree-l2"><a class="reference internal" href="configuration.html#overriding-defaults-examples">Overriding Defaults - Examples</a></li>
-<li class="toctree-l2"><a class="reference internal" href="configuration.html#passing-key-value-pairs-from-command-line">Passing Key-Value Pairs from Command Line</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="configuration.html#cli-options">CLI Options</a></li>
-<li class="toctree-l3"><a class="reference internal" href="configuration.html#dataloader-cli-options">Dataloader CLI Options</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#framework-and-strategy-configuration">Framework and Strategy Configuration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#yaml-override-files">YAML Override Files</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#command-line-overrides">Command-Line Overrides</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="configuration.html#haymaker.config.cli_options-get_parser_for_other_module-positional-arguments">Positional Arguments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="configuration.html#haymaker.config.cli_options-get_parser_for_other_module-named-arguments">Named Arguments</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#live-configuration">Live Configuration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#dataloader-configuration">Dataloader Configuration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#safe-object-conversion">Safe Object Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configuration.html#migration-from-the-legacy-schema">Migration from the Legacy Schema</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a><ul>
@@ -290,6 +296,19 @@
 <li class="toctree-l2"><a class="reference internal" href="logging.html#dataloader-module">Dataloader Module</a></li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="supervisor.html">Connection Supervisor</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="supervisor.html#purpose">Purpose</a></li>
+<li class="toctree-l2"><a class="reference internal" href="supervisor.html#recovery-policies">Recovery Policies</a></li>
+<li class="toctree-l2"><a class="reference internal" href="supervisor.html#usage">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="supervisor.html#settings">Settings</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="ib_message_codes.html">IB Message Codes</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="ib_message_codes.html#connection-and-data-recovery">Connection and Data Recovery</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ib_message_codes.html#order-and-request-messages">Order and Request Messages</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ib_message_codes.html#operational-rule-of-thumb">Operational Rule of Thumb</a></li>
+</ul>
+</li>
 <li class="toctree-l1"><a class="reference internal" href="execution.html">Execution Module</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="execution.html#atom-object">Atom Object</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="execution.html#haymaker.base.Atom"><code class="docutils literal notranslate"><span class="pre">Atom</span></code></a></li>
@@ -297,6 +316,7 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="execution.html#strategy-building-components">Strategy Building Components</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="execution.html#dataframe-persistence">Dataframe Persistence</a></li>
 <li class="toctree-l3"><a class="reference internal" href="execution.html#streamer">Streamer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="execution.html#aggregator">Aggregator</a></li>
 <li class="toctree-l3"><a class="reference internal" href="execution.html#block">Block</a></li>
@@ -312,7 +332,21 @@
 </li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="dataloader.html">Dataloader Module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="dataloader.html">Dataloader Module</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#quick-start">Quick Start</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#source-csv">Source CSV</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#futures-selection">Futures Selection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#command-line">Command Line</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#configuration">Configuration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#gap-filling">Gap Filling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#datastore">Datastore</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#availability-and-limits">Availability And Limits</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#date-policy">Date Policy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#connection-and-pacing">Connection And Pacing</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#completion-and-failures">Completion And Failures</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dataloader.html#operational-notes">Operational Notes</a></li>
+</ul>
+</li>
 <li class="toctree-l1"><a class="reference internal" href="research/index.html">Research Package</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="research/overview.html">Overview</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="research/overview.html#purpose">Purpose</a></li>

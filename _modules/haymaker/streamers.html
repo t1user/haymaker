@@ -197,6 +197,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -265,13 +267,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">haymaker.misc</span><span class="w"> </span><span class="kn">import</span> <span class="n">format_timestamp</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">.base</span><span class="w"> </span><span class="kn">import</span> <span class="n">Atom</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">CONFIG</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">.databases</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_mongo_client</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">.datastore</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">AsyncAbstractBaseStore</span><span class="p">,</span>
-    <span class="n">AsyncArcticStore</span><span class="p">,</span>
-    <span class="n">CollectionNamerBarsizeSetting</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.datastore</span><span class="w"> </span><span class="kn">import</span> <span class="n">AsyncDataStore</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.details_processor</span><span class="w"> </span><span class="kn">import</span> <span class="n">typical_session_length</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.durationStr_converters</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">datapoints_to_durationStr</span><span class="p">,</span>
@@ -284,11 +280,9 @@
 
 <span class="n">_counter</span> <span class="o">=</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">()</span><span class="o">.</span><span class="fm">__next__</span>
 
-<span class="n">MARKET_DATA_LIB_NAME</span> <span class="o">=</span> <span class="n">CONFIG</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;market_data_lib&quot;</span><span class="p">,</span> <span class="s2">&quot;market_data&quot;</span><span class="p">)</span>
-
 
 <span class="k">def</span><span class="w"> </span><span class="nf">bar_filter</span><span class="p">(</span><span class="n">bar</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarData</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return `true` if bar is faulty&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Return `true` if bar is faulty"""</span>
     <span class="k">return</span> <span class="nb">any</span><span class="p">(</span>
         <span class="p">(</span>
             <span class="n">bar</span><span class="o">.</span><span class="n">close</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">,</span>
@@ -303,8 +297,8 @@
 <div class="viewcode-block" id="Streamer">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">Streamer</span><span class="p">(</span><span class="n">Atom</span><span class="p">,</span> <span class="n">ABC</span><span class="p">):</span>
-    <span class="n">instances</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="s2">&quot;Streamer&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="n">timeout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">instances</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="s2">"Streamer"</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">timeout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">True</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__new__</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="c1"># Keep track of all :class:`.Streamer` instances created so that they</span>
@@ -317,10 +311,10 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer.awaitables">[docs]</a>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">awaitables</span><span class="p">(</span><span class="bp">cls</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Awaitable</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Coroutines from all instantiated streamers.  Can be passed to</span>
 <span class="sd">        :py:func:`asyncio.gather`</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">return</span> <span class="p">[</span><span class="n">s</span><span class="o">.</span><span class="n">run</span><span class="p">()</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">cls</span><span class="o">.</span><span class="n">instances</span><span class="p">]</span></div>
 
 
@@ -331,28 +325,30 @@
 <div class="viewcode-block" id="Streamer.run">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.Streamer.run">[docs]</a>
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Start subscription and start emitting data.  This is the main</span>
 <span class="sd">        entry point into the streamer.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="c1"># this will check if contract changed and trigger</span>
         <span class="c1"># `onContractChanged` if necessary</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">onStart</span><span class="p">({})</span>
         <span class="n">ticker</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
         <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
         <span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dataEvent</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">ticker</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">"ticks"</span><span class="p">)</span>
         <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">isConnected</span><span class="p">():</span>
             <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span></div>
 
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_set_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">:</span> <span class="n">ev</span><span class="o">.</span><span class="n">Event</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Automatically monitor event for stale data.  Can be switched</span>
 <span class="sd">        off by overriding class variable `set_timeout`</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">timeout</span><span class="p">:</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">timeout</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">timeout</span><span class="p">,</span> <span class="nb">bool</span><span class="p">):</span>
             <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">timeout</span><span class="p">:</span>
+            <span class="n">Timeout</span><span class="o">.</span><span class="n">from_atom</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">timeout</span><span class="p">)</span>
 
     <span class="nd">@cached_property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_id</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -360,11 +356,11 @@
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="n">identifier</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_id</span><span class="p">)]</span>
-        <span class="k">if</span> <span class="n">contract</span> <span class="o">:=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;contract&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">contract</span> <span class="o">:=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">"contract"</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
             <span class="n">identifier</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">contract</span><span class="o">.</span><span class="n">symbol</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">name</span> <span class="o">:=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">name</span> <span class="o">:=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
             <span class="n">identifier</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&lt;</span><span class="si">{</span><span class="s1">&#39;&gt;&lt;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">identifier</span><span class="p">)</span><span class="si">}</span><span class="s2">&gt;&quot;</span></div>
+        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&lt;</span><span class="si">{</span><span class="s1">'&gt;&lt;'</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">identifier</span><span class="p">)</span><span class="si">}</span><span class="s2">&gt;"</span></div>
 
 
 
@@ -372,7 +368,7 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">HistoricalDataStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Stream historical and realtime bars as generated by</span>
 <span class="sd">    :meth:`ib_insync.IB.reqHistoricalDataAsync`</span>
 
@@ -402,12 +398,15 @@
 <span class="sd">    that has been tested, other values may be incompatible with other</span>
 <span class="sd">    framework components</span>
 
-<span class="sd">    * datastore: bool | AsyncAbstractBaseStore = False</span>
+<span class="sd">    * datastore: AsyncDataStore | None = None</span>
 
-<span class="sd">        ** if True, or a datastore is passed, last available datapoint</span>
+<span class="sd">        ** if a datastore is passed, last available datapoint</span>
 <span class="sd">    will be ready from database and only newer data will be requested;</span>
 
-<span class="sd">        ** if False - no data will be read from datastore, only from</span>
+<span class="sd">        ** a passed datastore must be fully configured with the symbol</span>
+<span class="sd">    naming policy matching this streamer's bar size;</span>
+
+<span class="sd">        ** if None - no data will be read from datastore, only from</span>
 <span class="sd">    broker</span>
 
 
@@ -421,14 +420,14 @@
 <span class="sd">        - For bars with duration longer than 5 seconds:</span>
 
 <span class="sd">            - last bar is always work in progress, it is still bound</span>
-<span class="sd">              to be updated, it&#39;s not suitable for usage yet</span>
+<span class="sd">              to be updated, it's not suitable for usage yet</span>
 
 <span class="sd">            - Updates happen every 5 seconds, `hasNewBar` will be True</span>
 <span class="sd">              only 5 seconds (+processing time, typically ca.  1 sec)</span>
 <span class="sd">              after new bar is ready</span>
 
 <span class="sd">            - There is no way to receive new bars immediately when</span>
-<span class="sd">              they&#39;re created; it doesn&#39;t matter how `updateEvent` is</span>
+<span class="sd">              they're created; it doesn't matter how `updateEvent` is</span>
 <span class="sd">              accessed</span>
 
 <span class="sd">        - 5 second bars behave the same as RealTimeBars:</span>
@@ -439,7 +438,7 @@
 <span class="sd">              same as bar lenght so no reason)</span>
 
 <span class="sd">        - Bars shorter than 5 seconds are not allowed</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">durationStr</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span>  <span class="c1"># can be given as number of required datapoints</span>
@@ -447,16 +446,22 @@
     <span class="n">whatToShow</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">useRTH</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">formatDate</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>  <span class="c1"># should be 2 for utc timestamp</span>
-    <span class="n">datastore</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">datastore</span><span class="p">:</span> <span class="n">AsyncDataStore</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">timeout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">_last_bar_date</span><span class="p">:</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">,</span> <span class="nb">bool</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+                <span class="s2">"datastore must be an AsyncDataStore or None; "</span>
+                <span class="s2">"boolean shortcuts are not supported"</span>
+            <span class="p">)</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">streaming_func</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Awaitable</span><span class="p">:</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqHistoricalDataAsync</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span>
-            <span class="n">endDateTime</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+            <span class="n">endDateTime</span><span class="o">=</span><span class="s2">""</span><span class="p">,</span>
             <span class="n">durationStr</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_durationStr</span><span class="p">,</span>
             <span class="n">barSizeSetting</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">,</span>
             <span class="n">whatToShow</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">whatToShow</span><span class="p">,</span>
@@ -466,49 +471,20 @@
             <span class="n">timeout</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="nd">@cached_property</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_datastore</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span> <span class="o">|</span> <span class="n">AsyncAbstractBaseStore</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
-            <span class="k">return</span> <span class="kc">None</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
-            <span class="k">assert</span> <span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span> <span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">}</span><span class="s2"> cannot initialize datastore because &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;MARKET_DATA_LIB_NAME was not given.&quot;</span>
-            <span class="p">)</span>
-            <span class="k">return</span> <span class="n">AsyncArcticStore</span><span class="p">(</span>
-                <span class="n">lib</span><span class="o">=</span><span class="n">MARKET_DATA_LIB_NAME</span><span class="p">,</span>
-                <span class="n">host</span><span class="o">=</span><span class="n">get_mongo_client</span><span class="p">(),</span>
-                <span class="n">collection_namer</span><span class="o">=</span><span class="n">CollectionNamerBarsizeSetting</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">),</span>
-            <span class="p">)</span>
-        <span class="k">elif</span> <span class="p">(</span>
-            <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">,</span> <span class="s2">&quot;read&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">,</span> <span class="s2">&quot;read_metadata&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">,</span> <span class="s2">&quot;override_collection_namer&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="p">):</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="o">.</span><span class="n">override_collection_namer</span><span class="p">(</span>
-                <span class="n">CollectionNamerBarsizeSetting</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">barSizeSetting</span><span class="p">)</span>
-            <span class="p">)</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;datastore must be True, False or instance of async datastore, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;not</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
-
 <div class="viewcode-block" id="HistoricalDataStreamer.last_db_point">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.HistoricalDataStreamer.last_db_point">[docs]</a>
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">last_db_point</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">datetime</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Return datetime for the last bar availble in the datastore for</span>
 <span class="sd">        given contract.</span>
 
 <span class="sd">        start_date: how far back should available data be searched</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="p">(</span><span class="n">store</span> <span class="o">:=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_datastore</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">store</span> <span class="o">:=</span> <span class="bp">self</span><span class="o">.</span><span class="n">datastore</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">return</span> <span class="kc">None</span>
 
-        <span class="k">if</span> <span class="n">up_to</span> <span class="o">:=</span> <span class="p">(</span><span class="k">await</span> <span class="n">store</span><span class="o">.</span><span class="n">read_metadata</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">))</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;up_to&quot;</span><span class="p">):</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> retrieved last date from datastore: </span><span class="si">{</span><span class="n">up_to</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">up_to</span> <span class="o">:=</span> <span class="p">(</span><span class="k">await</span> <span class="n">store</span><span class="o">.</span><span class="n">read_metadata</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">))</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"up_to"</span><span class="p">):</span>
+            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> retrieved last date from datastore: </span><span class="si">{</span><span class="n">up_to</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
             <span class="k">return</span> <span class="n">format_timestamp</span><span class="p">(</span><span class="n">up_to</span><span class="p">)</span>
 
         <span class="n">df</span> <span class="o">=</span> <span class="k">await</span> <span class="n">store</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">)</span>
@@ -519,11 +495,11 @@
 
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_ensure_durationStr</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Accept durationStr as either ready str to be passed to</span>
-<span class="sd">        :meth:`ib_insync.IB.reqHistoricalData` or if it&#39;s passed as a</span>
+<span class="sd">        :meth:`ib_insync.IB.reqHistoricalData` or if it's passed as a</span>
 <span class="sd">        number of required datapoints int, convert it to the correct str.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="n">datapoints_to_durationStr</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">durationStr</span><span class="p">,</span>
@@ -552,17 +528,17 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">onStart</span><span class="p">({})</span>
 
         <span class="c1"># this starts subscription so that current price is readily available from ib</span>
-        <span class="n">stream</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqMktData</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="s2">&quot;221&quot;</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">stream</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
+        <span class="n">stream</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">reqMktData</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">contract</span><span class="p">,</span> <span class="s2">"221"</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">stream</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">"ticks"</span><span class="p">)</span>
 
-        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> requesting bars </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_durationStr</span><span class="si">=}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> requesting bars </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_durationStr</span><span class="si">=}</span><span class="s2">"</span><span class="p">)</span>
         <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">sync_last_bar_date</span><span class="p">()</span>
         <span class="n">bars</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
         <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> received historical bars, last bar date: &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">bars</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="n">bars</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2"> received historical bars, last bar date: "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">bars</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">date</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">bars</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="n">bars</span><span class="si">}</span><span class="s2">"</span>
         <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">"bars"</span><span class="p">)</span>
 
         <span class="k">try</span><span class="p">:</span>
             <span class="k">async</span> <span class="k">for</span> <span class="n">bars_</span><span class="p">,</span> <span class="n">hasNewBar</span> <span class="ow">in</span> <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">:</span>
@@ -572,7 +548,7 @@
                     <span class="bp">self</span><span class="o">.</span><span class="n">_last_bar_date</span> <span class="o">=</span> <span class="n">bars_</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">date</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">on_new_bar</span><span class="p">(</span><span class="n">bars_</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
         <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Empty emit for </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+            <span class="n">log</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Empty emit for </span><span class="si">{</span><span class="bp">self</span><span class="si">!s}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span></div>
 
 
     <span class="k">def</span><span class="w"> </span><span class="nf">on_new_bar</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bars</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">BarDataList</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -596,10 +572,11 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.MktDataStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">MktDataStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Stream market data.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Stream market data."""</span>
 
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">tickList</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">timeout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">True</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
@@ -613,7 +590,7 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.RealTimeBarsStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">RealTimeBarsStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Stream realtime 5 seconds bars.</span>
 
 <span class="sd">    Notes on the specifics of Interactive Brokers API:</span>
@@ -629,12 +606,13 @@
 
 <span class="sd">    - All bars including the last one are immediately usable</span>
 
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">whatToShow</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">useRTH</span><span class="p">:</span> <span class="nb">bool</span>
     <span class="n">realTimeBarsOptions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ibi</span><span class="o">.</span><span class="n">TagValue</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">timeout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">True</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
@@ -650,16 +628,16 @@
 <div class="viewcode-block" id="RealTimeBarsStreamer.run">
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.RealTimeBarsStreamer.run">[docs]</a>
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        The difference to superclass is that here we connect the</span>
 <span class="sd">        `updateEvent` to intermediary function `onUpdate`, which needs</span>
 <span class="sd">        to perform some additional checks before emitting `dataEvent`.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">onStart</span><span class="p">({})</span>
         <span class="n">bars</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streaming_func</span><span class="p">()</span>
         <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
         <span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">onUpdate</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">&quot;bars&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_timeout</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">updateEvent</span><span class="p">,</span> <span class="s2">"bars"</span><span class="p">)</span>
         <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">ib</span><span class="o">.</span><span class="n">isConnected</span><span class="p">():</span>
             <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span></div>
 
@@ -677,12 +655,13 @@
 <a class="viewcode-back" href="../../execution.html#haymaker.streamers.TickByTickStreamer">[docs]</a>
 <span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">TickByTickStreamer</span><span class="p">(</span><span class="n">Streamer</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Stream tick by tick data.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Stream tick by tick data."""</span>
 
     <span class="n">contract</span><span class="p">:</span> <span class="n">ibi</span><span class="o">.</span><span class="n">Contract</span>
     <span class="n">tickType</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">numberOfTicks</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">ignoreSize</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">timeout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="nb">float</span> <span class="o">=</span> <span class="kc">True</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">Atom</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>

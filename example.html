@@ -198,6 +198,8 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -264,7 +266,6 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">aggregators</span><span class="p">,</span>
-    <span class="n">app</span><span class="p">,</span>
     <span class="n">base</span><span class="p">,</span>
     <span class="n">bracket_legs</span><span class="p">,</span>
     <span class="n">block</span><span class="p">,</span>
@@ -285,30 +286,29 @@
     <span class="n">atr_lookback</span><span class="p">:</span> <span class="nb">int</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">df</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;fast_ema&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">fast_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;slow_ema&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slow_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;signal&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;fast_ema&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;slow_ema&quot;</span><span class="p">])</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;atr&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">indicators</span><span class="o">.</span><span class="n">atr</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">atr_lookback</span><span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"fast_ema"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"close"</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">fast_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"slow_ema"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"close"</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slow_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"signal"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">"fast_ema"</span><span class="p">]</span> <span class="o">-</span> <span class="n">df</span><span class="p">[</span><span class="s2">"slow_ema"</span><span class="p">])</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"atr"</span><span class="p">]</span> <span class="o">=</span> <span class="n">indicators</span><span class="o">.</span><span class="n">atr</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">atr_lookback</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">df</span>
 
 
-<span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
+<span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">"ES"</span><span class="p">,</span> <span class="s2">"CME"</span><span class="p">)</span>
 
 <span class="n">portfolio</span><span class="o">.</span><span class="n">FixedPortfolio</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
 
 <span class="n">pipe</span> <span class="o">=</span> <span class="n">base</span><span class="o">.</span><span class="n">Pipe</span><span class="p">(</span>
-    <span class="n">streamers</span><span class="o">.</span><span class="n">HistoricalDataStreamer</span><span class="p">(</span><span class="n">es_contract</span><span class="p">,</span> <span class="s2">&quot;10 D&quot;</span><span class="p">,</span> <span class="s2">&quot;1 hours&quot;</span><span class="p">,</span> <span class="s2">&quot;TRADES&quot;</span><span class="p">),</span>
+    <span class="n">streamers</span><span class="o">.</span><span class="n">HistoricalDataStreamer</span><span class="p">(</span><span class="n">es_contract</span><span class="p">,</span> <span class="s2">"10 D"</span><span class="p">,</span> <span class="s2">"1 hours"</span><span class="p">,</span> <span class="s2">"TRADES"</span><span class="p">),</span>
     <span class="n">aggregators</span><span class="o">.</span><span class="n">BarAggregator</span><span class="p">(</span><span class="n">aggregators</span><span class="o">.</span><span class="n">NoFilter</span><span class="p">()),</span>
-    <span class="n">EMACrossStrategy</span><span class="p">(</span><span class="s2">&quot;ema_cross_ES&quot;</span><span class="p">,</span> <span class="n">es_contract</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">24</span><span class="p">),</span>
+    <span class="n">EMACrossStrategy</span><span class="p">(</span>
+        <span class="s2">"ema_cross_ES"</span><span class="p">,</span> <span class="n">es_contract</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">24</span><span class="p">,</span> <span class="n">auto_roll_futures</span><span class="o">=</span><span class="kc">False</span>
+    <span class="p">),</span>
     <span class="n">signals</span><span class="o">.</span><span class="n">BinarySignalProcessor</span><span class="p">(),</span>
     <span class="n">portfolio</span><span class="o">.</span><span class="n">PortfolioWrapper</span><span class="p">(),</span>
     <span class="n">execution_models</span><span class="o">.</span><span class="n">EventDrivenExecModel</span><span class="p">(</span>
-        <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">&quot;atr&quot;</span><span class="p">)</span>
+        <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">"atr"</span><span class="p">)</span>
     <span class="p">),</span>
 <span class="p">)</span>
-
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-    <span class="n">app</span><span class="o">.</span><span class="n">App</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
 </pre></div>
 </div>
 <div class="admonition warning">
@@ -344,20 +344,20 @@
     <span class="n">atr_lookback</span><span class="p">:</span> <span class="nb">int</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">df</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;fast_ema&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">fast_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;slow_ema&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slow_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;signal&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;fast_ema&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;slow_ema&quot;</span><span class="p">])</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;atr&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">indicators</span><span class="o">.</span><span class="n">atr</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">atr_lookback</span><span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"fast_ema"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"close"</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">fast_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"slow_ema"</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"close"</span><span class="p">]</span><span class="o">.</span><span class="n">ewm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">slow_lookback</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"signal"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">"fast_ema"</span><span class="p">]</span> <span class="o">-</span> <span class="n">df</span><span class="p">[</span><span class="s2">"slow_ema"</span><span class="p">])</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"atr"</span><span class="p">]</span> <span class="o">=</span> <span class="n">indicators</span><span class="o">.</span><span class="n">atr</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">atr_lookback</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">df</span>
 </pre></div>
 </div>
 </div>
-<p>This defines the trading signals using <a class="reference internal" href="execution.html#haymaker.block.AbstractDfBlock" title="haymaker.block.AbstractDfBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.5)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
-<p>The data received via <cite>onData</cite> is wrapped into a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.5)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with column names matching the keys in the <cite>data</cite> dictionary. Users must ensure upstream components provide all required data for signal generation.</p>
-<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.5)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
+<p>This defines the trading signals using <a class="reference internal" href="execution.html#haymaker.block.AbstractDfBlock" title="haymaker.block.AbstractDfBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock</span></code></a>. It requires a <code class="xref py py-class docutils literal notranslate"><span class="pre">dataclasses.dataclass</span></code> with the strategy name, contract, and parameters. The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must be overridden to process a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> containing market data (e.g., Open, High, Low, Close, Volume, AveragePrice), depending on the connected streamers and processors.</p>
+<p>The data received via <cite>onData</cite> is wrapped into a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with column names matching the keys in the <cite>data</cite> dictionary. Users must ensure upstream components provide all required data for signal generation.</p>
+<p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock.df()</span></code> method must return a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.DataFrame</span></code></a> with a <code class="docutils literal notranslate"><span class="pre">signal</span></code> column: 1 for long, 0 for no position, -1 for short. Additional columns (e.g., <code class="docutils literal notranslate"><span class="pre">atr</span></code>) can be included for downstream components.</p>
 <div class="literal-block-wrapper docutils container" id="id2">
 <div class="code-block-caption"><span class="caption-text">Defining the ES futures contract</span><a class="headerlink" href="#id2" title="Link to this code">¶</a></div>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">&quot;ES&quot;</span><span class="p">,</span> <span class="s2">&quot;CME&quot;</span><span class="p">)</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">es_contract</span> <span class="o">=</span> <span class="n">ibi</span><span class="o">.</span><span class="n">ContFuture</span><span class="p">(</span><span class="s2">"ES"</span><span class="p">,</span> <span class="s2">"CME"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -375,13 +375,13 @@
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">base</span><span class="p">,</span> <span class="n">streamers</span><span class="p">,</span> <span class="n">aggregators</span><span class="p">,</span> <span class="n">signals</span><span class="p">,</span> <span class="n">execution_models</span><span class="p">,</span> <span class="n">portfolio</span><span class="p">,</span> <span class="n">bracket_legs</span>
 
 <span class="n">pipe</span> <span class="o">=</span> <span class="n">base</span><span class="o">.</span><span class="n">Pipe</span><span class="p">(</span>
-    <span class="n">streamers</span><span class="o">.</span><span class="n">HistoricalDataStreamer</span><span class="p">(</span><span class="n">es_contract</span><span class="p">,</span> <span class="s2">&quot;10 D&quot;</span><span class="p">,</span> <span class="s2">&quot;1 hour&quot;</span><span class="p">,</span> <span class="s2">&quot;TRADES&quot;</span><span class="p">),</span>
+    <span class="n">streamers</span><span class="o">.</span><span class="n">HistoricalDataStreamer</span><span class="p">(</span><span class="n">es_contract</span><span class="p">,</span> <span class="s2">"10 D"</span><span class="p">,</span> <span class="s2">"1 hour"</span><span class="p">,</span> <span class="s2">"TRADES"</span><span class="p">),</span>
     <span class="n">aggregators</span><span class="o">.</span><span class="n">BarAggregator</span><span class="p">(</span><span class="n">aggregators</span><span class="o">.</span><span class="n">NoFilter</span><span class="p">()),</span>
-    <span class="n">EMACrossStrategy</span><span class="p">(</span><span class="s2">&quot;ema_cross_ES&quot;</span><span class="p">,</span> <span class="n">es_contract</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">24</span><span class="p">),</span>
+    <span class="n">EMACrossStrategy</span><span class="p">(</span><span class="s2">"ema_cross_ES"</span><span class="p">,</span> <span class="n">es_contract</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">24</span><span class="p">),</span>
     <span class="n">signals</span><span class="o">.</span><span class="n">BinarySignalProcessor</span><span class="p">(),</span>
     <span class="n">portfolio</span><span class="o">.</span><span class="n">PortfolioWrapper</span><span class="p">(),</span>
     <span class="n">execution_models</span><span class="o">.</span><span class="n">EventDrivenExecModel</span><span class="p">(</span>
-        <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">&quot;atr&quot;</span><span class="p">)</span>
+        <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">"atr"</span><span class="p">)</span>
     <span class="p">),</span>
 <span class="p">)</span>
 </pre></div>
@@ -392,7 +392,7 @@
 <ul>
 <li><div class="literal-block-wrapper docutils container" id="id5">
 <div class="code-block-caption"><span class="caption-text">Historical data streamer</span><a class="headerlink" href="#id5" title="Link to this code">¶</a></div>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">streamers</span><span class="o">.</span><span class="n">HistoricalDataStreamer</span><span class="p">(</span><span class="n">es_contract</span><span class="p">,</span> <span class="s2">&quot;10 D&quot;</span><span class="p">,</span> <span class="s2">&quot;1 hour&quot;</span><span class="p">,</span> <span class="s2">&quot;TRADES&quot;</span><span class="p">)</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">streamers</span><span class="o">.</span><span class="n">HistoricalDataStreamer</span><span class="p">(</span><span class="n">es_contract</span><span class="p">,</span> <span class="s2">"10 D"</span><span class="p">,</span> <span class="s2">"1 hour"</span><span class="p">,</span> <span class="s2">"TRADES"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -408,7 +408,7 @@
 </li>
 <li><div class="literal-block-wrapper docutils container" id="id7">
 <div class="code-block-caption"><span class="caption-text">EMA crossover strategy instance</span><a class="headerlink" href="#id7" title="Link to this code">¶</a></div>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">EMACrossStrategy</span><span class="p">(</span><span class="s2">&quot;ema_cross_ES&quot;</span><span class="p">,</span> <span class="n">es_contract</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">24</span><span class="p">)</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">EMACrossStrategy</span><span class="p">(</span><span class="s2">"ema_cross_ES"</span><span class="p">,</span> <span class="n">es_contract</span><span class="p">,</span> <span class="mi">12</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">24</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -440,7 +440,7 @@
 <li><div class="literal-block-wrapper docutils container" id="id10">
 <div class="code-block-caption"><span class="caption-text">Event-driven execution model</span><a class="headerlink" href="#id10" title="Link to this code">¶</a></div>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">execution_models</span><span class="o">.</span><span class="n">EventDrivenExecModel</span><span class="p">(</span>
-    <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">&quot;atr&quot;</span><span class="p">)</span>
+    <span class="n">stop</span><span class="o">=</span><span class="n">bracket_legs</span><span class="o">.</span><span class="n">TrailingStop</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">vol_field</span><span class="o">=</span><span class="s2">"atr"</span><span class="p">)</span>
 <span class="p">)</span>
 </pre></div>
 </div>
@@ -448,23 +448,48 @@
 <p>Sends a <a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.order.MarketOrder" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.order.MarketOrder</span></code></a> to the broker. Upon fill, places a trailing stop-loss order with a distance of 3×ATR (requires an <code class="docutils literal notranslate"><span class="pre">atr</span></code> column from the <a class="reference internal" href="execution.html#haymaker.block.AbstractDfBlock" title="haymaker.block.AbstractDfBlock"><code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.block.AbstractDfBlock</span></code></a>).</p>
 </li>
 </ul>
+<p>Save the pipeline in a Python strategy file, for example <code class="docutils literal notranslate"><span class="pre">strategy.py</span></code>. This
+file is the trading setup passed to Haymaker: it contains the contracts,
+strategy components, and pipeline wiring for one or more strategies.</p>
+<p>To exclude a strategy from the daily futures roll, set
+<code class="docutils literal notranslate"><span class="pre">auto_roll_futures=False</span></code> on its block:</p>
 <div class="literal-block-wrapper docutils container" id="id11">
-<div class="code-block-caption"><span class="caption-text">Running the application</span><a class="headerlink" href="#id11" title="Link to this code">¶</a></div>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">haymaker</span><span class="w"> </span><span class="kn">import</span> <span class="n">app</span>
-
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-    <span class="n">app</span><span class="o">.</span><span class="n">App</span><span class="p">()</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+<div class="code-block-caption"><span class="caption-text">Optional strategy policy</span><a class="headerlink" href="#id11" title="Link to this code">¶</a></div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">strategy</span> <span class="o">=</span> <span class="n">EMACrossStrategy</span><span class="p">(</span>
+    <span class="s2">"ema_cross_ES"</span><span class="p">,</span>
+    <span class="n">es_contract</span><span class="p">,</span>
+    <span class="mi">12</span><span class="p">,</span>
+    <span class="mi">48</span><span class="p">,</span>
+    <span class="mi">24</span><span class="p">,</span>
+    <span class="n">auto_roll_futures</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 </div>
-<p>Run this as a script (e.g., <code class="docutils literal notranslate"><span class="pre">strategy.py</span></code>):</p>
+<p>Run the strategy file with the <code class="docutils literal notranslate"><span class="pre">haymaker</span></code> command:</p>
 <div class="literal-block-wrapper docutils container" id="id12">
 <div class="code-block-caption"><span class="caption-text">Starting the strategy</span><a class="headerlink" href="#id12" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>strategy.py
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>haymaker<span class="w"> </span>strategy.py
 </pre></div>
 </div>
 </div>
-<p>Ensure <code class="docutils literal notranslate"><span class="pre">python</span></code> is the correct interpreter. Long-running scripts should be managed as processes (see process management documentation—link TBD).</p>
+<p>Configuration can be supplied with <code class="docutils literal notranslate"><span class="pre">--file</span></code>/<code class="docutils literal notranslate"><span class="pre">-f</span></code> or environment variables
+as described in <a class="reference internal" href="configuration.html"><span class="doc">Configuration</span></a>:</p>
+<div class="literal-block-wrapper docutils container" id="id13">
+<div class="code-block-caption"><span class="caption-text">Starting with a YAML override</span><a class="headerlink" href="#id13" title="Link to this code">¶</a></div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>haymaker<span class="w"> </span>strategy.py<span class="w"> </span>--file<span class="w"> </span>live_config.yaml
+</pre></div>
+</div>
+</div>
+<div class="literal-block-wrapper docutils container" id="id14">
+<div class="code-block-caption"><span class="caption-text">Starting with an environment-selected YAML override</span><a class="headerlink" href="#id14" title="Link to this code">¶</a></div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">HAYMAKER_HAYMAKER_CONFIG_OVERRIDES</span><span class="o">=</span>/path/to/live_config.yaml
+haymaker<span class="w"> </span>strategy.py
+</pre></div>
+</div>
+</div>
+<p>Ensure <code class="docutils literal notranslate"><span class="pre">haymaker</span></code> comes from the intended environment. Long-running process
+management, including systemd units, will be documented separately.</p>
 </section>
 <section id="conclusion">
 <h2>Conclusion<a class="headerlink" href="#conclusion" title="Link to this heading">¶</a></h2>

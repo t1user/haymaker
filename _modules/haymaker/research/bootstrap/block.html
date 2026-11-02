@@ -197,6 +197,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../../installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../../execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -248,9 +250,9 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for haymaker.research.bootstrap.block</h1><div class="highlight"><pre>
-<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span></span><span class="sd">"""</span>
 <span class="sd">Block bootstrap generators for synthetic OHLC research data.</span>
-<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">"""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -262,10 +264,10 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">RAW_COLUMNS</span><span class="p">,</span> <span class="n">RandomState</span><span class="p">,</span> <span class="n">_reconstruct_path</span><span class="p">,</span> <span class="n">_rng</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">prepare_bootstrap_frame</span>
 
-<span class="n">BootstrapMethod</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;stationary&quot;</span><span class="p">,</span> <span class="s2">&quot;moving&quot;</span><span class="p">,</span> <span class="s2">&quot;circular&quot;</span><span class="p">]</span>
-<span class="n">BlockLength</span> <span class="o">=</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;auto&quot;</span><span class="p">]</span>
+<span class="n">BootstrapMethod</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"stationary"</span><span class="p">,</span> <span class="s2">"moving"</span><span class="p">,</span> <span class="s2">"circular"</span><span class="p">]</span>
+<span class="n">BlockLength</span> <span class="o">=</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"auto"</span><span class="p">]</span>
 
-<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;bootstrap&quot;</span><span class="p">,</span> <span class="s2">&quot;optimal_block_length&quot;</span><span class="p">]</span>
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"bootstrap"</span><span class="p">,</span> <span class="s2">"optimal_block_length"</span><span class="p">]</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_acf</span><span class="p">(</span><span class="n">series</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">max_lag</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]:</span>
@@ -283,7 +285,7 @@
     <span class="n">clean</span> <span class="o">=</span> <span class="n">series</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
     <span class="n">nobs</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">clean</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">nobs</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;At least two observations are required.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"At least two observations are required."</span><span class="p">)</span>
 
     <span class="n">max_lag</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">nobs</span><span class="p">)),</span> <span class="n">nobs</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span>
     <span class="n">noise_band</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">nobs</span><span class="p">)</span>
@@ -302,10 +304,10 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">optimal_block_length</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span> <span class="o">|</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
-    <span class="n">column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;close&quot;</span><span class="p">,</span>
-    <span class="n">method</span><span class="p">:</span> <span class="n">BootstrapMethod</span> <span class="o">=</span> <span class="s2">&quot;stationary&quot;</span><span class="p">,</span>
+    <span class="n">column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"close"</span><span class="p">,</span>
+    <span class="n">method</span><span class="p">:</span> <span class="n">BootstrapMethod</span> <span class="o">=</span> <span class="s2">"stationary"</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Estimate a block length for bootstrap sampling.</span>
 
 <span class="sd">    If ``arch`` is installed, this delegates to</span>
@@ -321,16 +323,16 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Positive integer block length.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Column </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> is not in data.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Column </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> is not in data."</span><span class="p">)</span>
         <span class="n">series</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">series</span> <span class="o">=</span> <span class="n">data</span>
 
-    <span class="k">if</span> <span class="n">method</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;stationary&quot;</span><span class="p">,</span> <span class="s2">&quot;moving&quot;</span><span class="p">,</span> <span class="s2">&quot;circular&quot;</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown bootstrap method: </span><span class="si">{</span><span class="n">method</span><span class="si">!r}</span><span class="s2">.&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">method</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"stationary"</span><span class="p">,</span> <span class="s2">"moving"</span><span class="p">,</span> <span class="s2">"circular"</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unknown bootstrap method: </span><span class="si">{</span><span class="n">method</span><span class="si">!r}</span><span class="s2">."</span><span class="p">)</span>
 
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">arch.bootstrap</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># type: ignore[import-not-found]</span>
@@ -344,8 +346,8 @@
     <span class="k">except</span> <span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="ne">ZeroDivisionError</span><span class="p">,</span> <span class="ne">FloatingPointError</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">_fallback_optimal_block_length</span><span class="p">(</span><span class="n">series</span><span class="p">)</span>
 
-    <span class="n">result_key</span> <span class="o">=</span> <span class="s2">&quot;stationary&quot;</span> <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;stationary&quot;</span> <span class="k">else</span> <span class="s2">&quot;circular&quot;</span>
-    <span class="n">block_length</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">result_key</span><span class="p">,</span> <span class="s2">&quot;block_length&quot;</span><span class="p">])</span>
+    <span class="n">result_key</span> <span class="o">=</span> <span class="s2">"stationary"</span> <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">"stationary"</span> <span class="k">else</span> <span class="s2">"circular"</span>
+    <span class="n">block_length</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">float</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">result_key</span><span class="p">,</span> <span class="s2">"block_length"</span><span class="p">])</span>
     <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">block_length</span><span class="p">)))</span></div>
 
 
@@ -353,13 +355,13 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_resolve_block_length</span><span class="p">(</span>
     <span class="n">prepared</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">block_length</span><span class="p">:</span> <span class="n">BlockLength</span><span class="p">,</span> <span class="n">method</span><span class="p">:</span> <span class="n">BootstrapMethod</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">block_length</span> <span class="o">==</span> <span class="s2">&quot;auto&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">block_length</span> <span class="o">==</span> <span class="s2">"auto"</span><span class="p">:</span>
         <span class="n">resolved</span> <span class="o">=</span> <span class="n">optimal_block_length</span><span class="p">(</span><span class="n">prepared</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="n">method</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;moving&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">"moving"</span><span class="p">:</span>
             <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="n">resolved</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">prepared</span><span class="p">))</span>
         <span class="k">return</span> <span class="n">resolved</span>
     <span class="k">if</span> <span class="n">block_length</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;block_length must be at least 1.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"block_length must be at least 1."</span><span class="p">)</span>
     <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">block_length</span><span class="p">)</span>
 
 
@@ -389,7 +391,7 @@
     <span class="n">circular</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">circular</span> <span class="ow">and</span> <span class="n">block_length</span> <span class="o">&gt;</span> <span class="n">nobs</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;moving block_length cannot exceed the data length.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"moving block_length cannot exceed the data length."</span><span class="p">)</span>
 
     <span class="n">indices</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">length</span><span class="p">:</span>
@@ -413,13 +415,13 @@
     <span class="n">method</span><span class="p">:</span> <span class="n">BootstrapMethod</span><span class="p">,</span>
     <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;stationary&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">"stationary"</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">_stationary_indices</span><span class="p">(</span><span class="n">nobs</span><span class="p">,</span> <span class="n">length</span><span class="p">,</span> <span class="n">block_length</span><span class="p">,</span> <span class="n">rng</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;moving&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">"moving"</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">_fixed_block_indices</span><span class="p">(</span><span class="n">nobs</span><span class="p">,</span> <span class="n">length</span><span class="p">,</span> <span class="n">block_length</span><span class="p">,</span> <span class="n">rng</span><span class="p">,</span> <span class="n">circular</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;circular&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">"circular"</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">_fixed_block_indices</span><span class="p">(</span><span class="n">nobs</span><span class="p">,</span> <span class="n">length</span><span class="p">,</span> <span class="n">block_length</span><span class="p">,</span> <span class="n">rng</span><span class="p">,</span> <span class="n">circular</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown bootstrap method: </span><span class="si">{</span><span class="n">method</span><span class="si">!r}</span><span class="s2">.&quot;</span><span class="p">)</span>
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unknown bootstrap method: </span><span class="si">{</span><span class="n">method</span><span class="si">!r}</span><span class="s2">."</span><span class="p">)</span>
 
 
 <div class="viewcode-block" id="bootstrap">
@@ -427,13 +429,13 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">bootstrap</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
-    <span class="n">method</span><span class="p">:</span> <span class="n">BootstrapMethod</span> <span class="o">=</span> <span class="s2">&quot;stationary&quot;</span><span class="p">,</span>
-    <span class="n">block_length</span><span class="p">:</span> <span class="n">BlockLength</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+    <span class="n">method</span><span class="p">:</span> <span class="n">BootstrapMethod</span> <span class="o">=</span> <span class="s2">"stationary"</span><span class="p">,</span>
+    <span class="n">block_length</span><span class="p">:</span> <span class="n">BlockLength</span> <span class="o">=</span> <span class="s2">"auto"</span><span class="p">,</span>
     <span class="n">paths</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
     <span class="n">random_state</span><span class="p">:</span> <span class="n">RandomState</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">raw_columns</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">RAW_COLUMNS</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Generate synthetic OHLC paths using block bootstrap sampling.</span>
 
 <span class="sd">    The input dataframe is used as-is. The first row anchors reconstruction,</span>
@@ -445,11 +447,11 @@
 <span class="sd">            are required. ``volume`` and ``barCount`` are carried as raw sampled</span>
 <span class="sd">            values when present. Unknown columns are dropped.</span>
 <span class="sd">        method: How historical rows are resampled into synthetic paths. Use</span>
-<span class="sd">            ``&quot;stationary&quot;`` for variable-length blocks, ``&quot;moving&quot;`` for</span>
-<span class="sd">            fixed-length non-wrapping blocks, or ``&quot;circular&quot;`` for</span>
+<span class="sd">            ``"stationary"`` for variable-length blocks, ``"moving"`` for</span>
+<span class="sd">            fixed-length non-wrapping blocks, or ``"circular"`` for</span>
 <span class="sd">            fixed-length wrapping blocks.</span>
 <span class="sd">        block_length: Average block length for stationary bootstrap, fixed block</span>
-<span class="sd">            length for moving/circular bootstrap, or ``&quot;auto&quot;``.</span>
+<span class="sd">            length for moving/circular bootstrap, or ``"auto"``.</span>
 <span class="sd">        paths: Number of paths to generate.</span>
 <span class="sd">        random_state: Integer seed or numpy generator.</span>
 <span class="sd">        raw_columns: Columns sampled as raw bar attributes instead of returns.</span>
@@ -459,20 +461,20 @@
 <span class="sd">        and length ``len(data) - 1``.</span>
 
 <span class="sd">    Notes:</span>
-<span class="sd">        ``&quot;stationary&quot;`` continues to the next historical row unless it jumps</span>
+<span class="sd">        ``"stationary"`` continues to the next historical row unless it jumps</span>
 <span class="sd">        to a new random row. The jump probability is ``1 / block_length``.</span>
-<span class="sd">        ``&quot;moving&quot;`` samples fixed-length blocks whose full span fits inside</span>
-<span class="sd">        the source data. ``&quot;circular&quot;`` samples fixed-length blocks that may</span>
+<span class="sd">        ``"moving"`` samples fixed-length blocks whose full span fits inside</span>
+<span class="sd">        the source data. ``"circular"`` samples fixed-length blocks that may</span>
 <span class="sd">        wrap from the end of the source data back to the beginning.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">paths</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;paths must be at least 1.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"paths must be at least 1."</span><span class="p">)</span>
 
     <span class="n">prepared</span> <span class="o">=</span> <span class="n">prepare_bootstrap_frame</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">raw_columns</span><span class="o">=</span><span class="n">raw_columns</span><span class="p">)</span>
     <span class="n">nobs</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">prepared</span><span class="p">)</span>
 
     <span class="n">resolved_block_length</span> <span class="o">=</span> <span class="n">_resolve_block_length</span><span class="p">(</span><span class="n">prepared</span><span class="p">,</span> <span class="n">block_length</span><span class="p">,</span> <span class="n">method</span><span class="p">)</span>
-    <span class="n">starting_price</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">starting_price</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">"close"</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
     <span class="n">path_index</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
     <span class="n">generator</span> <span class="o">=</span> <span class="n">_rng</span><span class="p">(</span><span class="n">random_state</span><span class="p">)</span>
 

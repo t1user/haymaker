@@ -172,7 +172,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
         <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
@@ -198,6 +198,8 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -249,14 +251,465 @@
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
             <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
         <article role="main" id="furo-main-content">
           <section id="dataloader-module">
 <h1>Dataloader Module<a class="headerlink" href="#dataloader-module" title="Link to this heading">¶</a></h1>
-<p>Interactive Brokers imposes strict throttling on historical data downloads.While IB is not designed for data collection, the Dataloader Module works within IB limitations to download available historical price and volume data.</p>
+<p>The dataloader is Haymaker’s standalone command for collecting Interactive
+Brokers historical data into the configured Arctic datastore. It reads a CSV of
+IB contract definitions, downloads the missing history for each contract, and
+can later refresh the same series or fill detected gaps.</p>
+<p>It does not place orders.</p>
+<section id="quick-start">
+<h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p>Make sure TWS or IB Gateway is running and API connections are enabled.</p></li>
+<li><p>Create a source CSV with one contract specification per row.</p></li>
+<li><p>Create a dataloader YAML settings file, or use the defaults with command-line
+overrides.</p></li>
+<li><p>Run <code class="docutils literal notranslate"><span class="pre">dataloader</span></code>.</p></li>
+</ol>
+<p>Example source file:</p>
+<div class="literal-block-wrapper docutils container" id="id1">
+<div class="code-block-caption"><span class="caption-text">nq.csv</span><a class="headerlink" href="#id1" title="Link to this code">¶</a></div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>secType,symbol,exchange,currency
+FUT,NQ,CME,USD
+</pre></div>
+</div>
+</div>
+<p>Example settings file:</p>
+<div class="literal-block-wrapper docutils container" id="id2">
+<div class="code-block-caption"><span class="caption-text">nq_30s.yaml</span><a class="headerlink" href="#id2" title="Link to this code">¶</a></div>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">connection</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">client_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="nt">download</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nq.csv</span>
+<span class="w">  </span><span class="nt">bar_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30 secs</span>
+<span class="w">  </span><span class="nt">what_to_show</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TRADES</span>
+<span class="w">  </span><span class="nt">max_lookback_days</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span>
+<span class="w">  </span><span class="nt">gap_fill_mode</span><span class="p">:</span><span class="w"> </span><span class="s">"off"</span>
+<span class="w">  </span><span class="nt">use_rth</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="nt">futures</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">current_and_expired</span>
+</pre></div>
+</div>
+</div>
+<p>Run it:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-f<span class="w"> </span>nq_30s.yaml
+</pre></div>
+</div>
+<p>The first run backfills the available range allowed by IB and the datastore
+state. Re-running the same command updates the same datastore series from its
+stored boundary.</p>
+</section>
+<section id="source-csv">
+<h2>Source CSV<a class="headerlink" href="#source-csv" title="Link to this heading">¶</a></h2>
+<p>The source CSV columns must be valid <code class="docutils literal notranslate"><span class="pre">ib_insync.Contract</span></code> fields. Unknown
+column names are rejected before any contract-detail request is sent to IB;
+this catches misspelled headers instead of silently ignoring them. The most
+important columns are usually:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">secType</span></code></dt><dd><p>IB security type, such as <code class="docutils literal notranslate"><span class="pre">STK</span></code>, <code class="docutils literal notranslate"><span class="pre">FUT</span></code>, <code class="docutils literal notranslate"><span class="pre">CONTFUT</span></code>, <code class="docutils literal notranslate"><span class="pre">CASH</span></code>, <code class="docutils literal notranslate"><span class="pre">IND</span></code>,
+<code class="docutils literal notranslate"><span class="pre">CFD</span></code>, <code class="docutils literal notranslate"><span class="pre">OPT</span></code>, or <code class="docutils literal notranslate"><span class="pre">FOP</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">symbol</span></code></dt><dd><p>IB symbol, such as <code class="docutils literal notranslate"><span class="pre">AAPL</span></code>, <code class="docutils literal notranslate"><span class="pre">NQ</span></code>, or <code class="docutils literal notranslate"><span class="pre">EUR</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">exchange</span></code></dt><dd><p>Exchange or routing destination, such as <code class="docutils literal notranslate"><span class="pre">SMART</span></code>, <code class="docutils literal notranslate"><span class="pre">CME</span></code>, <code class="docutils literal notranslate"><span class="pre">IDEALPRO</span></code>,
+or <code class="docutils literal notranslate"><span class="pre">NASDAQ</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">currency</span></code></dt><dd><p>Contract currency, such as <code class="docutils literal notranslate"><span class="pre">USD</span></code> or <code class="docutils literal notranslate"><span class="pre">EUR</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">lastTradeDateOrContractMonth</span></code></dt><dd><p>Optional contract month or exact expiry for futures/options. Use this when
+you want a specific contract instead of the configured futures selector.</p>
+</dd>
+</dl>
+<p>Examples:</p>
+<div class="literal-block-wrapper docutils container" id="id3">
+<div class="code-block-caption"><span class="caption-text">stocks.csv</span><a class="headerlink" href="#id3" title="Link to this code">¶</a></div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>secType,symbol,exchange,currency
+STK,AAPL,SMART,USD
+STK,MSFT,SMART,USD
+</pre></div>
+</div>
+</div>
+<div class="literal-block-wrapper docutils container" id="id4">
+<div class="code-block-caption"><span class="caption-text">fx.csv</span><a class="headerlink" href="#id4" title="Link to this code">¶</a></div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>secType,symbol,exchange,currency
+CASH,EUR,IDEALPRO,USD
+CASH,GBP,IDEALPRO,USD
+</pre></div>
+</div>
+</div>
+<div class="literal-block-wrapper docutils container" id="id5">
+<div class="code-block-caption"><span class="caption-text">exact_futures.csv</span><a class="headerlink" href="#id5" title="Link to this code">¶</a></div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>secType,symbol,lastTradeDateOrContractMonth,exchange,currency
+FUT,NQ,20260918,CME,USD
+FUT,ES,20260918,CME,USD
+</pre></div>
+</div>
+</div>
+</section>
+<section id="futures-selection">
+<h2>Futures Selection<a class="headerlink" href="#futures-selection" title="Link to this heading">¶</a></h2>
+<p>Rows with <code class="docutils literal notranslate"><span class="pre">secType</span></code> set to <code class="docutils literal notranslate"><span class="pre">FUT</span></code> or <code class="docutils literal notranslate"><span class="pre">CONTFUT</span></code> use the dataloader futures
+selector. Configure it with <code class="docutils literal notranslate"><span class="pre">futures.selector</span></code>:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">current_and_expired</span></code></dt><dd><p>Default. Download the current contract and expired contracts returned by IB.
+This is the usual choice for building a historical futures library.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">current</span></code></dt><dd><p>Download the current contract. Use <code class="docutils literal notranslate"><span class="pre">futures.current_index</span></code> to offset from
+the current contract in the futures chain.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">fullchain</span></code></dt><dd><p>Download contracts from the full chain returned by IB. Use
+<code class="docutils literal notranslate"><span class="pre">futures.full_chain_spec</span></code> with <code class="docutils literal notranslate"><span class="pre">full</span></code>, <code class="docutils literal notranslate"><span class="pre">active</span></code>, or <code class="docutils literal notranslate"><span class="pre">expired</span></code> to narrow
+the chain.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">exact</span></code></dt><dd><p>Use the contract exactly as specified in the CSV row.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">contfuture</span></code></dt><dd><p>Download IB’s continuous future contract. IB requires continuous-future
+historical requests to use an empty <code class="docutils literal notranslate"><span class="pre">endDateTime</span></code>, so the dataloader makes
+one latest-ended request range and does not schedule internal gap fills for
+<code class="docutils literal notranslate"><span class="pre">CONTFUT</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">current_and_contfuture</span></code></dt><dd><p>Download both the current explicit future and IB’s continuous future.</p>
+</dd>
+</dl>
+<p>Common futures setup:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">download</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nq.csv</span>
+<span class="w">  </span><span class="nt">bar_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30 secs</span>
+<span class="w">  </span><span class="nt">what_to_show</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TRADES</span>
+<span class="nt">futures</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">current_and_expired</span>
+</pre></div>
+</div>
+<p>Exact-contract setup:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">download</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exact_futures.csv</span>
+<span class="w">  </span><span class="nt">bar_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1 hour</span>
+<span class="w">  </span><span class="nt">what_to_show</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TRADES</span>
+<span class="nt">futures</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exact</span>
+</pre></div>
+</div>
+</section>
+<section id="command-line">
+<h2>Command Line<a class="headerlink" href="#command-line" title="Link to this heading">¶</a></h2>
+<p>Run with a source CSV and default settings:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>contracts.csv
+</pre></div>
+</div>
+<p>Run with a YAML settings file:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-f<span class="w"> </span>settings.yaml
+</pre></div>
+</div>
+<p>Override the gap-fill mode for one run:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-f<span class="w"> </span>settings.yaml<span class="w"> </span>-g<span class="w"> </span>auto
+</pre></div>
+</div>
+<p>Set simple config values from the command line:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>contracts.csv<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-s<span class="w"> </span>download.bar_size<span class="w"> </span><span class="s2">"1 hour"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-s<span class="w"> </span>download.what_to_show<span class="w"> </span>MIDPOINT
+</pre></div>
+</div>
+<p>Command-line values are parsed as YAML, preserving booleans, numbers, lists,
+and <code class="docutils literal notranslate"><span class="pre">null</span></code>. Quote values containing spaces.</p>
+</section>
+<section id="configuration">
+<h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">¶</a></h2>
+<p>The configuration loader validates the root and dataloader storage schema;
+the dataloader runtime and target constructors validate the fields they own.
+The bundled
+<code class="docutils literal notranslate"><span class="pre">haymaker/config/dataloader_base_config.yaml</span></code> is a complete, commented
+reference profile that pins the dataloader’s effective defaults; user files
+need include only the values changed for a run.</p>
+<p>Common settings:</p>
+<dl>
+<dt><code class="docutils literal notranslate"><span class="pre">download.source</span></code></dt><dd><p>CSV file containing contract rows.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">download.bar_size</span></code></dt><dd><p>IB bar size. Examples: <code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">secs</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">min</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">hour</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">day</span></code>,
+<code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">week</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">month</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">download.what_to_show</span></code></dt><dd><p>IB <code class="docutils literal notranslate"><span class="pre">whatToShow</span></code> value. Common choices are <code class="docutils literal notranslate"><span class="pre">TRADES</span></code>, <code class="docutils literal notranslate"><span class="pre">MIDPOINT</span></code>,
+<code class="docutils literal notranslate"><span class="pre">BID</span></code>, <code class="docutils literal notranslate"><span class="pre">ASK</span></code>, and <code class="docutils literal notranslate"><span class="pre">BID_ASK</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">download.max_lookback_days</span></code></dt><dd><p>Optional maximum lookback span, in calendar days, considered by one
+dataloader run. Omit it or set it to <code class="docutils literal notranslate"><span class="pre">null</span></code> to load all data available
+under IB’s limits and the datastore’s own backfill state. Set it to a
+positive integer, such as <code class="docutils literal notranslate"><span class="pre">30</span></code>, to deliberately limit a run to recent
+history.</p>
+<p>When IB does not provide a head timestamp, the dataloader still probes for
+historical data because IB can return bars in that situation. The fallback
+starts at most five calendar years back and remains clamped by this setting
+and known IB small-bar or expired-future availability limits.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">download.gap_fill_mode</span></code></dt><dd><p>Gap-fill behavior for already stored data. See <a class="reference internal" href="#dataloader-gap-fill"><span class="std std-ref">Gap Filling</span></a>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">download.use_rth</span></code></dt><dd><p>Passed to IB historical-data and historical-schedule requests.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">connection.host</span></code></dt><dd><p>Hostname or IP address of TWS or IB Gateway. The default is <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">connection.port</span></code></dt><dd><p>TWS or IB Gateway API port. The default is <code class="docutils literal notranslate"><span class="pre">4002</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">connection.client_id</span></code></dt><dd><p>IB API client ID. The dataloader default is <code class="docutils literal notranslate"><span class="pre">1</span></code> so it is distinct from the
+live runtime’s expected <code class="docutils literal notranslate"><span class="pre">connection.client_id=0</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">download.number_of_workers</span></code></dt><dd><p>Number of worker tasks consuming planned downloads. The default is <code class="docutils literal notranslate"><span class="pre">10</span></code>.
+Increasing it can keep more contracts active, but does not bypass local or IB
+pacing limits. The producer queue is bounded to
+<code class="docutils literal notranslate"><span class="pre">max(1,</span> <span class="pre">number_of_workers</span> <span class="pre">//</span> <span class="pre">4)</span></code> jobs, so even small worker counts apply
+backpressure rather than creating an accidentally unbounded queue.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">download.save_every_chunks</span></code></dt><dd><p>Number of downloaded chunks buffered before creating a new datastore
+version. The default is <code class="docutils literal notranslate"><span class="pre">10</span></code>. A range completion or orderly dataloader
+shutdown also saves any remaining chunks. Larger values reduce full-series
+rewrites but increase the amount of recently downloaded data that a forced
+process termination may lose.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">pacing.allowance_fraction</span></code></dt><dd><p>Multiplies the dataloader’s local pacing capacity. The default is <code class="docutils literal notranslate"><span class="pre">1.0</span></code>.
+Use values below <code class="docutils literal notranslate"><span class="pre">1.0</span></code> to leave more room for other IB clients. Values above
+<code class="docutils literal notranslate"><span class="pre">1.0</span></code> are allowed for experimentation, but deliberately exceed IB’s
+published pacing limits and may trigger broker throttling or pacing
+violations.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">storage.base_directory</span></code></dt><dd><p>Data directory below the user’s home directory. The default is <code class="docutils literal notranslate"><span class="pre">ib_data</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">storage.mongodb.client</span></code></dt><dd><p>Keyword arguments passed to <code class="docutils literal notranslate"><span class="pre">pymongo.MongoClient</span></code>, such as <code class="docutils literal notranslate"><span class="pre">host</span></code> and
+<code class="docutils literal notranslate"><span class="pre">port</span></code>. These are the only Mongo settings used by the dataloader. The
+framework database is live-only; library names and dataframe save frequency
+belong to explicit consumer composition. Those paths are rejected in the
+dataloader profile.</p>
+</dd>
+</dl>
+<p>Unknown keys in <code class="docutils literal notranslate"><span class="pre">download</span></code>, <code class="docutils literal notranslate"><span class="pre">pacing</span></code>, <code class="docutils literal notranslate"><span class="pre">futures</span></code>, or <code class="docutils literal notranslate"><span class="pre">storage</span></code> are
+rejected. Worker and save counts must be positive integers,
+<code class="docutils literal notranslate"><span class="pre">max_lookback_days</span></code> must be a positive integer or <code class="docutils literal notranslate"><span class="pre">null</span></code>, boolean settings
+must be YAML booleans, and <code class="docutils literal notranslate"><span class="pre">pacing.allowance_fraction</span></code> must be a finite
+positive number.</p>
+<p>Example: daily stock bars:</p>
+<div class="literal-block-wrapper docutils container" id="id6">
+<div class="code-block-caption"><span class="caption-text">stocks_daily.yaml</span><a class="headerlink" href="#id6" title="Link to this code">¶</a></div>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">download</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">stocks.csv</span>
+<span class="w">  </span><span class="nt">bar_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1 day</span>
+<span class="w">  </span><span class="nt">what_to_show</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TRADES</span>
+<span class="w">  </span><span class="nt">max_lookback_days</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span>
+<span class="w">  </span><span class="nt">gap_fill_mode</span><span class="p">:</span><span class="w"> </span><span class="s">"off"</span>
+<span class="w">  </span><span class="nt">use_rth</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</pre></div>
+</div>
+</div>
+<p>Example: hourly FX midpoint bars:</p>
+<div class="literal-block-wrapper docutils container" id="id7">
+<div class="code-block-caption"><span class="caption-text">fx_hourly.yaml</span><a class="headerlink" href="#id7" title="Link to this code">¶</a></div>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">download</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fx.csv</span>
+<span class="w">  </span><span class="nt">bar_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1 hour</span>
+<span class="w">  </span><span class="nt">what_to_show</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MIDPOINT</span>
+<span class="w">  </span><span class="nt">max_lookback_days</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">365</span>
+<span class="w">  </span><span class="nt">gap_fill_mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">auto</span>
+<span class="w">  </span><span class="nt">use_rth</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="gap-filling">
+<span id="dataloader-gap-fill"></span><h2>Gap Filling<a class="headerlink" href="#gap-filling" title="Link to this heading">¶</a></h2>
+<p>Gap filling is optional. It is intended for a second pass over already stored
+dataloader data.</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">off</span></code></dt><dd><p>Do not schedule internal datastore gaps. This is the safest default for a
+first run.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">heuristic</span></code></dt><dd><p>Detect gaps from stored bar regularity. Repeated short local-time gaps and
+simple weekend gaps are treated as typical non-trading gaps.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">schedule</span></code></dt><dd><p>Ask IB for historical schedules and fill only gaps that overlap reported
+trading sessions. If IB does not return a usable schedule for a contract,
+planning for that contract fails.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">auto</span></code></dt><dd><p>Try schedule mode first, then fall back to heuristic mode when schedule data
+is unavailable.</p>
+</dd>
+</dl>
+<p>Suggested workflow:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-f<span class="w"> </span>nq_30s.yaml
+dataloader<span class="w"> </span>-f<span class="w"> </span>nq_30s.yaml<span class="w"> </span>-g<span class="w"> </span>auto
+</pre></div>
+</div>
+<p>The first command builds or updates the library. The second command performs a
+gap-fill pass over the stored data.</p>
+</section>
+<section id="datastore">
+<h2>Datastore<a class="headerlink" href="#datastore" title="Link to this heading">¶</a></h2>
+<p>The dataloader currently writes to the Arctic-backed Haymaker datastore. The
+library name is derived from <code class="docutils literal notranslate"><span class="pre">download.what_to_show</span></code> and
+<code class="docutils literal notranslate"><span class="pre">download.bar_size</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">TRADES</span></code> + <code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">secs</span></code> -&gt; <code class="docutils literal notranslate"><span class="pre">TRADES_30_secs</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">MIDPOINT</span></code> + <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">hour</span></code> -&gt; <code class="docutils literal notranslate"><span class="pre">MIDPOINT_1_hour</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TRADES</span></code> + <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">day</span></code> -&gt; <code class="docutils literal notranslate"><span class="pre">TRADES_1_day</span></code></p></li>
+</ul>
+<p>Collections use Haymaker’s default contract naming policy.</p>
+<p>Saved <code class="docutils literal notranslate"><span class="pre">up_to</span></code> metadata records the latest timestamp in the complete series,
+including when older backfill data is merged into existing history.</p>
+<p>Each save creates a complete new Arctic version of the series. The dataloader
+does not append fragments directly, so a saved version remains independently
+readable. <code class="docutils literal notranslate"><span class="pre">save_every_chunks</span></code> controls how frequently a long download creates
+these versions. Dataframe writes and completion-metadata updates are awaited:
+their calls return only after Arctic has completed the operation, and failures
+are reported where the write was requested. If cancellation arrives after a
+write starts, the dataloader finishes that write and its corresponding buffer
+or range update before allowing a supervised restart to continue.</p>
+<p>The dataloader does not submit datastore mutations through a background queue.
+Its persistence guarantee comes from awaiting each Arctic operation and
+reporting failures at that operation’s call site.</p>
+<p>Read data back with the datastore API:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">ib_insync</span><span class="w"> </span><span class="kn">import</span> <span class="n">Future</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">haymaker.datastore</span><span class="w"> </span><span class="kn">import</span> <span class="n">ArcticStore</span>
+
+<span class="n">store</span> <span class="o">=</span> <span class="n">ArcticStore</span><span class="p">(</span><span class="s2">"TRADES_30_secs"</span><span class="p">)</span>
+<span class="n">contract</span> <span class="o">=</span> <span class="n">Future</span><span class="p">(</span><span class="s2">"NQ"</span><span class="p">,</span> <span class="s2">"20260918"</span><span class="p">,</span> <span class="s2">"CME"</span><span class="p">,</span> <span class="n">currency</span><span class="o">=</span><span class="s2">"USD"</span><span class="p">)</span>
+
+<span class="n">df</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="n">contract</span><span class="p">)</span>
+<span class="n">metadata</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">read_metadata</span><span class="p">(</span><span class="n">contract</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">store.keys()</span></code> to inspect the available collection names when you do not
+know the exact contract key.</p>
+</section>
+<section id="availability-and-limits">
+<h2>Availability And Limits<a class="headerlink" href="#availability-and-limits" title="Link to this heading">¶</a></h2>
+<p>IB historical data has hard limits and contract-specific availability gaps. The
+dataloader avoids requests that are known to be unavailable:</p>
+<ul class="simple">
+<li><p>bars of <code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">secs</span></code> or smaller are not requested more than six months back;</p></li>
+<li><p>expired futures are not requested earlier than two years before exact expiry;</p></li>
+<li><p>expired options, futures options, and warrants are skipped when exact expiry
+is known.</p></li>
+</ul>
+<p>Historical-data request chunk size is an internal dataloader policy. It is
+targeted at approximately 10,000 bars and remains capped by IB’s documented
+duration rules for the selected bar size. IB recommends smaller responses, so
+if large requests are slow, review the dataloader log before increasing worker
+count or pacing allowance.</p>
+<p>The dataloader reads existing data and applies known contract-age limits before
+requesting <code class="docutils literal notranslate"><span class="pre">headTimeStamp</span></code>. It requests that timestamp only when older
+backfill remains possible; update-only and <code class="docutils literal notranslate"><span class="pre">backfill_exhausted</span></code> series do not
+spend a discovery request on it.</p>
+<p>When a backfill request reaches a no-data boundary for a series that already
+has stored data, the dataloader writes <code class="docutils literal notranslate"><span class="pre">backfill_exhausted:</span> <span class="pre">true</span></code> to that
+series metadata. Later runs skip older backfill for that series while still
+allowing updates and optional gap filling.</p>
+<p>When an update reaches the exact expiry of a contract that is already expired,
+the dataloader writes <code class="docutils literal notranslate"><span class="pre">update_exhausted:</span> <span class="pre">true</span></code>. Later runs skip only the
+terminal update for that series; older backfill and optional gap filling remain
+eligible. For intraday data, if the stored endpoint is no more than one bar
+before exact past expiry, the dataloader records completion without spending an
+additional IB historical request. The marker is never used to suppress updates
+for live contracts, and missing metadata retains normal download behavior.</p>
+</section>
+<section id="date-policy">
+<h2>Date Policy<a class="headerlink" href="#date-policy" title="Link to this heading">¶</a></h2>
+<p>The dataloader uses IB <code class="docutils literal notranslate"><span class="pre">formatDate=2</span></code>.</p>
+<ul class="simple">
+<li><p>Intraday bars are stored and compared as timezone-aware UTC <code class="docutils literal notranslate"><span class="pre">datetime</span></code>
+values.</p></li>
+<li><p>Daily, weekly, and monthly bars use <code class="docutils literal notranslate"><span class="pre">date</span></code> values.</p></li>
+<li><p>Other IB date formats are not exposed in this dataloader path.</p></li>
+</ul>
+</section>
+<section id="connection-and-pacing">
+<h2>Connection And Pacing<a class="headerlink" href="#connection-and-pacing" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">DataloaderRuntime</span></code> creates its own <code class="docutils literal notranslate"><span class="pre">ib_insync.IB</span></code> client and session, then
+runs under the Haymaker connection supervisor. The supervisor reconnects the
+IB API socket but does not start, stop, or restart TWS/IB Gateway.</p>
+<p>When a socket outage causes a supervised workload restart, the existing
+dataloader session first queues its unfinished active jobs and then starts a
+fresh contract-discovery pass. Contracts whose planning completed earlier in
+the process are skipped. A contract interrupted while loading datastore state
+or awaiting broker inputs is not marked as planned, so it is discovered again
+after reconnection. Jobs are registered as active before they can block on the
+bounded producer queue.</p>
+<p>The dataloader does not request a whole-process restart merely because one
+historical request takes a long time. IB can legitimately throttle historical
+requests for extended periods; socket health and reconnection remain the
+supervisor’s responsibility.</p>
+<p>There is no dataloader connection-mode setting. Configure the gateway address,
+port, and <code class="docutils literal notranslate"><span class="pre">connection.client_id</span></code> used by this standalone connection. The default client ID
+is <code class="docutils literal notranslate"><span class="pre">1</span></code>; choose another value when that ID is already in use.</p>
+<p>The dataloader locally enforces IB’s hard historical pacing rules for bars of
+<code class="docutils literal notranslate"><span class="pre">30</span> <span class="pre">secs</span></code> or less. Bars of <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">min</span></code> or longer retain a concurrency bound but
+do not use the small-bar 60-request/10-minute window. Head timestamps and
+contract details use a separate conservative discovery allowance. Historical
+schedules remain in the historical bucket because IB exposes them through the
+historical-data API without publishing a separate quota. One small-bar request
+slot is reserved for supervised connection probes.</p>
+<p>With DEBUG logging enabled, request messages distinguish these stages:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">prepared</span> <span class="pre">...</span> <span class="pre">handing</span> <span class="pre">it</span> <span class="pre">to</span> <span class="pre">the</span> <span class="pre">local</span> <span class="pre">pacer</span></code> means a worker has built the
+request but has not sent it;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Local</span> <span class="pre">pacer</span> <span class="pre">delaying</span></code> names the local rule and remaining delay;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Submitted</span> <span class="pre">...</span> <span class="pre">to</span> <span class="pre">IB;</span> <span class="pre">awaiting</span> <span class="pre">response</span></code> means IB has received the request;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">IB</span> <span class="pre">request</span> <span class="pre">...</span> <span class="pre">completed</span></code> reports broker response latency.</p></li>
+</ul>
+<p>Every five minutes, <code class="docutils literal notranslate"><span class="pre">Dataloader</span> <span class="pre">status</span></code> reports engaged workers, workers and
+requests waiting for IB, local pacing or concurrency waits, and contracts waiting
+for a worker. Follow-up lines name each outstanding IB request with its elapsed
+wait and each queued contract. Producer state distinguishes active planning from
+backpressure such as <code class="docutils literal notranslate"><span class="pre">blocked_on_full_queue</span> <span class="pre">(next=...)</span></code>. Availability skips
+explicitly say <code class="docutils literal notranslate"><span class="pre">local</span> <span class="pre">policy</span></code> when they are inferred from documented IB limits
+rather than returned by IB.</p>
+</section>
+<section id="completion-and-failures">
+<h2>Completion And Failures<a class="headerlink" href="#completion-and-failures" title="Link to this heading">¶</a></h2>
+<p>Normal completion means all planned contracts were processed, but individual
+historical requests can fail while other contracts continue. Review the final
+log summary for failed download jobs before treating a large run as complete.
+Re-running the same command plans remaining work again from the data already
+saved in Arctic.</p>
+<p>Pressing <code class="docutils literal notranslate"><span class="pre">Ctrl-C</span></code> requests an orderly supervisor stop. Active requests are
+cancelled, an already-started datastore mutation is allowed to settle,
+and downloaded chunks are flushed before the process exits. Avoid sending a
+second forced interrupt while these final writes are being logged.</p>
+<p>The run stops rather than continuing when it cannot safely plan or persist data,
+including these cases:</p>
+<ul class="simple">
+<li><p>a source row identifies an unknown or ambiguous contract;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">schedule</span></code> gap mode cannot obtain a usable historical schedule;</p></li>
+<li><p>local date or dataframe processing fails;</p></li>
+<li><p>an Arctic read or write fails.</p></li>
+</ul>
+<p>IB connection failures are handled by the connection supervisor. During an
+orderly restart or shutdown, buffered chunks are saved before the session
+finishes. After reconnection, active jobs resume before incomplete contract
+discovery is replayed. A forced process kill can lose only the chunks
+accumulated since the last threshold or range-completion save.</p>
+</section>
+<section id="operational-notes">
+<h2>Operational Notes<a class="headerlink" href="#operational-notes" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Use a distinct <code class="docutils literal notranslate"><span class="pre">connection.client_id</span></code> if another process already uses <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p></li>
+<li><p>Keep <code class="docutils literal notranslate"><span class="pre">download.gap_fill_mode:</span> <span class="pre">off</span></code> for initial large downloads unless you are
+intentionally running a gap pass.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">download.use_rth:</span> <span class="pre">true</span></code> only when you want regular-trading-hours data and
+schedules.</p></li>
+<li><p>Re-run the same settings file to update an existing library.</p></li>
+<li><p>If IB returns no older backfill data for an existing series, future runs will
+honor <code class="docutils literal notranslate"><span class="pre">backfill_exhausted:</span> <span class="pre">true</span></code> metadata.</p></li>
+<li><p>Expired series checked through exact expiry use <code class="docutils literal notranslate"><span class="pre">update_exhausted:</span> <span class="pre">true</span></code> to
+avoid repeating the same terminal update request.</p></li>
+<li><dl class="simple">
+<dt>A full process stop does not write a separate checkpoint. The next process</dt><dd><p>derives remaining work from the persisted datastore boundaries.</p>
+</dd>
+</dl>
+</li>
+</ul>
+</section>
 </section>
 
         </article>
@@ -302,8 +755,38 @@
         
       </footer>
     </div>
-    <aside class="toc-drawer no-toc">
+    <aside class="toc-drawer">
       
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Dataloader Module</a><ul>
+<li><a class="reference internal" href="#quick-start">Quick Start</a></li>
+<li><a class="reference internal" href="#source-csv">Source CSV</a></li>
+<li><a class="reference internal" href="#futures-selection">Futures Selection</a></li>
+<li><a class="reference internal" href="#command-line">Command Line</a></li>
+<li><a class="reference internal" href="#configuration">Configuration</a></li>
+<li><a class="reference internal" href="#gap-filling">Gap Filling</a></li>
+<li><a class="reference internal" href="#datastore">Datastore</a></li>
+<li><a class="reference internal" href="#availability-and-limits">Availability And Limits</a></li>
+<li><a class="reference internal" href="#date-policy">Date Policy</a></li>
+<li><a class="reference internal" href="#connection-and-pacing">Connection And Pacing</a></li>
+<li><a class="reference internal" href="#completion-and-failures">Completion And Failures</a></li>
+<li><a class="reference internal" href="#operational-notes">Operational Notes</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
       
       
     </aside>

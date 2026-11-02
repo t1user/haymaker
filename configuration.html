@@ -198,6 +198,8 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -256,211 +258,291 @@
         <article role="main" id="furo-main-content">
           <section id="configuration">
 <h1>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">¶</a></h1>
-<p>Haymaker is highly configurable. Parameters can be set in the following order of priority:</p>
+<p>Haymaker configuration describes framework infrastructure and operating policy:
+connections, logging, persistence, controller behavior, order defaults, and
+historical downloads. Strategy-specific parameters remain ordinary Python data
+in the user’s strategy module; Haymaker does not parse or inject them.</p>
+<p>Configuration is loaded once by the command-line entrypoint. Live and
+dataloader configuration remain grouped into plain section mappings until each
+target constructs itself. Importing a Haymaker module does not inspect
+command-line arguments or environment values.</p>
+<section id="precedence">
+<h2>Precedence<a class="headerlink" href="#precedence" title="Link to this heading">¶</a></h2>
+<p>Values are merged in this order, from lowest to highest priority:</p>
 <ol class="arabic simple">
-<li><p>Command-line options (highest priority).</p></li>
-<li><p>System environment variables.</p></li>
-<li><p>User-provided configuration YAML file.</p></li>
-<li><p>Default configuration YAML file (fallback for undefined variables).</p></li>
+<li><p>Bundled profile defaults.</p></li>
+<li><p>A YAML file selected by the profile’s environment variable.</p></li>
+<li><p>A YAML file supplied with <code class="docutils literal notranslate"><span class="pre">--file</span></code> or <code class="docutils literal notranslate"><span class="pre">-f</span></code>.</p></li>
+<li><p>Repeatable dotted-path <code class="docutils literal notranslate"><span class="pre">--set-option</span></code> or <code class="docutils literal notranslate"><span class="pre">-s</span></code> overrides.</p></li>
+<li><p>Dedicated command-line switches such as <code class="docutils literal notranslate"><span class="pre">--reset</span></code> or
+<code class="docutils literal notranslate"><span class="pre">--gap-fill-mode</span></code>.</p></li>
 </ol>
+<p>Mappings are merged recursively. Lists and scalar values replace the lower
+priority value. A typed mapping such as <code class="docutils literal notranslate"><span class="pre">blotter.saver</span></code> is replaced as a
+whole when its <code class="docutils literal notranslate"><span class="pre">type</span></code> changes, which prevents options for one saver type from
+leaking into another.</p>
+</section>
 <section id="default-configuration-files">
 <h2>Default Configuration Files<a class="headerlink" href="#default-configuration-files" title="Link to this heading">¶</a></h2>
-<p>Sensible starting configurations are defined in default configuration files located here:</p>
+<p>The bundled profiles are defined in:</p>
 <ul class="simple">
-<li><p>For the Execution Module: <a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/base_config.yaml</a></p></li>
-<li><p>For the Dataloader Module: <a class="reference external" href="https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">https://github.com/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml</a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">haymaker/config/live_base_config.yaml</span></code> for live execution.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">haymaker/config/dataloader_base_config.yaml</span></code> for historical downloads.</p></li>
 </ul>
+<p>Both files are complete, commented reference profiles. They enumerate the
+supported settings and pin the effective defaults used by their command. User
+override files only need to contain values that differ from the bundled
+profile. The loader validates configuration structure and typed storage
+settings; the runtime targets that consume the other sections validate their
+own fields and values.</p>
+<p>Duplicate YAML keys and unknown top-level sections are rejected while loading.
+Section keys and values are interpreted by the target that consumes them;
+ordinary constructor errors therefore report invalid target arguments during
+runtime construction.</p>
 </section>
-<section id="user-provided-configuration-file">
-<h2>User-Provided Configuration File<a class="headerlink" href="#user-provided-configuration-file" title="Link to this heading">¶</a></h2>
-<p>The easiest way to create an override YAML file is to copy the default file and modify the desired values. Haymaker must be directed to the location of the overridden config file in one of two ways:</p>
-<ul class="simple">
-<li><p>From the command line using the <code class="docutils literal notranslate"><span class="pre">--file</span></code> or <code class="docutils literal notranslate"><span class="pre">-f</span></code> option.</p></li>
-<li><p>Via environment variables: <code class="docutils literal notranslate"><span class="pre">HAYMAKER_HAYMAKER_CONFIG_OVERRIDES</span></code> for the execution module or <code class="docutils literal notranslate"><span class="pre">HAYMAKER_DATALOADER_CONFIG_OVERRIDES</span></code> for the dataloader module.</p></li>
-</ul>
-</section>
-<section id="environment-variables">
-<h2>Environment Variables<a class="headerlink" href="#environment-variables" title="Link to this heading">¶</a></h2>
-<p>All Haymaker-related environment variables are prefixed with <code class="docutils literal notranslate"><span class="pre">HAYMAKER_</span></code>. This prefix is removed when reading the variables, signaling to the framework which variables to load into its configuration environment. This prevents Haymaker from importing unrelated variables.</p>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Environment variable names are <strong>case-insensitive</strong>.</p>
+<section id="framework-and-strategy-configuration">
+<h2>Framework and Strategy Configuration<a class="headerlink" href="#framework-and-strategy-configuration" title="Link to this heading">¶</a></h2>
+<p>Keep framework overrides in YAML and strategy construction in Python. For
+example:</p>
+<div class="literal-block-wrapper docutils container" id="id1">
+<div class="code-block-caption"><span class="caption-text">live_config.yaml</span><a class="headerlink" href="#id1" title="Link to this code">¶</a></div>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">connection</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4002</span>
+<span class="nt">controller</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">sync_frequency</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
+<span class="nt">logging</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">directory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production_logs</span>
+</pre></div>
 </div>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>For nested variables, only top-level settings can be overridden via CLI or environment variables. These are intended for quick overrides; the framework is primarily configured via YAML files.</p>
 </div>
-</section>
-<section id="overriding-defaults-examples">
-<h2>Overriding Defaults - Examples<a class="headerlink" href="#overriding-defaults-examples" title="Link to this heading">¶</a></h2>
-<p>To override defaults, copy a configuration file, modify the desired parameters, and pass the new file’s location to Haymaker via:</p>
-<ul>
-<li><p>Environment variable:</p>
 <div class="literal-block-wrapper docutils container" id="id2">
-<div class="code-block-caption"><span class="caption-text">Setting the config override via environment variable</span><a class="headerlink" href="#id2" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">HAYMAKER_HAYMAKER_CONFIG_OVERRIDES</span><span class="o">=</span>config.yaml
+<div class="code-block-caption"><span class="caption-text">strategy.py</span><a class="headerlink" href="#id2" title="Link to this code">¶</a></div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">strategy</span> <span class="o">=</span> <span class="n">MyStrategy</span><span class="p">(</span><span class="n">fast_period</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">slow_period</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
-</li>
-<li><p>Command-line argument:</p>
-<div class="literal-block-wrapper docutils container" id="id3">
-<div class="code-block-caption"><span class="caption-text">Passing the config file via CLI</span><a class="headerlink" href="#id3" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>--file<span class="w"> </span>config.yaml
-</pre></div>
-</div>
-</div>
-</li>
-</ul>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Command-line arguments take precedence over environment variables.</p>
-</div>
+<p>The strategy parameters are not part of the Haymaker configuration schema and
+should not be placed in the framework YAML file.</p>
 </section>
-<section id="passing-key-value-pairs-from-command-line">
-<h2>Passing Key-Value Pairs from Command Line<a class="headerlink" href="#passing-key-value-pairs-from-command-line" title="Link to this heading">¶</a></h2>
-<p>Use <code class="docutils literal notranslate"><span class="pre">-s</span></code> or <code class="docutils literal notranslate"><span class="pre">--set-option</span></code> to temporarily override parameters. For example, to specify a data source:</p>
-<div class="literal-block-wrapper docutils container" id="id4">
-<div class="code-block-caption"><span class="caption-text">Overriding a parameter via CLI</span><a class="headerlink" href="#id4" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-s<span class="w"> </span><span class="nb">source</span><span class="w"> </span>my_list.csv
+<section id="yaml-override-files">
+<h2>YAML Override Files<a class="headerlink" href="#yaml-override-files" title="Link to this heading">¶</a></h2>
+<p>Pass a profile-specific YAML file on the command line:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>haymaker<span class="w"> </span>strategy.py<span class="w"> </span>--file<span class="w"> </span>live_config.yaml
+dataloader<span class="w"> </span>contracts.csv<span class="w"> </span>--file<span class="w"> </span>dataloader_config.yaml
 </pre></div>
 </div>
-</div>
-<p>Available command-line options can be listed with:</p>
-<div class="literal-block-wrapper docutils container" id="id5">
-<div class="code-block-caption"><span class="caption-text">Displaying help for CLI options</span><a class="headerlink" href="#id5" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>module_name<span class="w"> </span>--help
+<p>Alternatively, select a deployment-specific file with one of the two supported
+environment variables:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">HAYMAKER_HAYMAKER_CONFIG_OVERRIDES</span><span class="o">=</span>/path/to/live_config.yaml
+<span class="nb">export</span><span class="w"> </span><span class="nv">HAYMAKER_DATALOADER_CONFIG_OVERRIDES</span><span class="o">=</span>/path/to/dataloader_config.yaml
 </pre></div>
 </div>
+<p>The live and dataloader selectors are independent. Direct setting overrides
+such as <code class="docutils literal notranslate"><span class="pre">HAYMAKER_LOGGING_PATH</span></code> are not supported; use YAML or a dotted CLI
+override instead. Environment variable names are case-sensitive.</p>
+</section>
+<section id="command-line-overrides">
+<h2>Command-Line Overrides<a class="headerlink" href="#command-line-overrides" title="Link to this heading">¶</a></h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">-s</span></code> or <code class="docutils literal notranslate"><span class="pre">--set-option</span></code> with a dotted setting path and a YAML value.
+The option may be repeated:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>haymaker<span class="w"> </span>strategy.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--set-option<span class="w"> </span>controller.sync_frequency<span class="w"> </span><span class="m">60</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--set-option<span class="w"> </span>logging.log_broker<span class="w"> </span><span class="nb">true</span>
+
+dataloader<span class="w"> </span>contracts.csv<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--set-option<span class="w"> </span>download.bar_size<span class="w"> </span><span class="s1">'1 hour'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--set-option<span class="w"> </span>download.number_of_workers<span class="w"> </span><span class="m">4</span>
+</pre></div>
 </div>
-<section id="cli-options">
-<h3>CLI Options<a class="headerlink" href="#cli-options" title="Link to this heading">¶</a></h3>
-<p>Assuming your strategy is in <code class="docutils literal notranslate"><span class="pre">your_module.py</span></code> and imports <code class="xref py py-class docutils literal notranslate"><span class="pre">haymaker.app.App</span></code>, the following options are available from the command line:</p>
-<p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here override those default settings.</p>
+<p>Values are parsed as YAML, so booleans and numbers are typed rather than stored
+as strings. Quote values containing spaces or values that the shell could
+interpret. Use the bundled profile comments to find supported setting paths;
+unknown options fail when their target is constructed.</p>
+<p>Dedicated live switches are <code class="docutils literal notranslate"><span class="pre">--cold-start</span></code>, <code class="docutils literal notranslate"><span class="pre">--reset</span></code>, <code class="docutils literal notranslate"><span class="pre">--zero</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">--nuke</span></code>. <code class="docutils literal notranslate"><span class="pre">--cold-start</span></code> sets <code class="docutils literal notranslate"><span class="pre">state_machine.restore</span></code> to false for that
+process. The dataloader provides <code class="docutils literal notranslate"><span class="pre">--gap-fill-mode</span></code> and accepts the contract
+source CSV as its optional positional argument. Dedicated switches have the
+highest precedence.</p>
+<p><p>Run a Haymaker strategy under connection supervision.</p>
 </p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">KEY</span> <span class="n">VALUE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">r</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">z</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">c</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">n</span><span class="p">]</span>
-                     <span class="p">[</span><span class="n">source</span><span class="p">]</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">haymaker</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">PATH</span> <span class="n">VALUE</span><span class="p">]</span> <span class="p">[</span><span class="o">--</span><span class="n">reset</span><span class="p">]</span> <span class="p">[</span><span class="o">--</span><span class="n">zero</span><span class="p">]</span>
+                <span class="p">[</span><span class="o">--</span><span class="n">cold</span><span class="o">-</span><span class="n">start</span><span class="p">]</span> <span class="p">[</span><span class="o">--</span><span class="n">nuke</span><span class="p">]</span>
+                <span class="n">module_path</span>
 </pre></div>
 </div>
 <section id="haymaker.config.cli_options-get_parser_for_other_module-positional-arguments">
-<h4>Positional Arguments<a class="headerlink" href="#haymaker.config.cli_options-get_parser_for_other_module-positional-arguments" title="Link to this heading">¶</a></h4>
+<h3>Positional Arguments<a class="headerlink" href="#haymaker.config.cli_options-get_parser_for_other_module-positional-arguments" title="Link to this heading">¶</a></h3>
 <dl class="option-list">
-<dt><kbd>source</kbd></dt>
-<dd><p>Optional file with source data.</p>
+<dt><kbd>module_path</kbd></dt>
+<dd><p>Python strategy module.</p>
 </dd>
 </dl>
 </section>
 <section id="haymaker.config.cli_options-get_parser_for_other_module-named-arguments">
-<h4>Named Arguments<a class="headerlink" href="#haymaker.config.cli_options-get_parser_for_other_module-named-arguments" title="Link to this heading">¶</a></h4>
+<h3>Named Arguments<a class="headerlink" href="#haymaker.config.cli_options-get_parser_for_other_module-named-arguments" title="Link to this heading">¶</a></h3>
 <dl class="option-list">
-<dt><kbd>-s, --set_option</kbd></dt>
-<dd><p>Use provided KEY VALUE pair to set parameter KEY to VALUE.</p>
-</dd>
 <dt><kbd>-f, --file</kbd></dt>
-<dd><p>Name of .yaml file with settings (which must exist in the current directory).</p>
+<dd><p>YAML file whose framework settings override bundled defaults.</p>
 </dd>
-<dt><kbd>-r, --reset</kbd></dt>
-<dd><p>On startup close all existing positions and cancel orders.</p>
-<p>Default: <code class="docutils literal notranslate"><span class="pre">False</span></code></p>
+<dt><kbd>-s, --set-option</kbd></dt>
+<dd><p>Override one dotted setting path with a YAML scalar or collection.</p>
+<p>Default: <code class="docutils literal notranslate"><span class="pre">[]</span></code></p>
 </dd>
-<dt><kbd>-z, --zero</kbd></dt>
-<dd><p>On startup zero-out all records.</p>
-<p>Default: <code class="docutils literal notranslate"><span class="pre">False</span></code></p>
+<dt><kbd>--reset</kbd></dt>
+<dd></dd>
+<dt><kbd>--zero</kbd></dt>
+<dd></dd>
+<dt><kbd>--cold-start</kbd></dt>
+<dd></dd>
+<dt><kbd>--nuke</kbd></dt>
+<dd></dd>
+</dl>
+</section>
+<p>Run <code class="docutils literal notranslate"><span class="pre">dataloader</span> <span class="pre">--help</span></code> for the complete dataloader option list.</p>
+</section>
+<section id="live-configuration">
+<h2>Live Configuration<a class="headerlink" href="#live-configuration" title="Link to this heading">¶</a></h2>
+<p>Live configuration is grouped by the service or policy it configures. Logging
+and storage remain subsystem groups because their settings are composed across
+closely related runtime objects.</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">connection</span></code></dt><dd><p>IB endpoint, client ID, timeouts, connection probe, and recovery policy. See
+<a class="reference internal" href="supervisor.html"><span class="doc">Connection Supervisor</span></a>.</p>
 </dd>
-<dt><kbd>-c, --coldstart</kbd></dt>
-<dd><p>Start programme without reading state from database.</p>
-<p>Default: <code class="docutils literal notranslate"><span class="pre">False</span></code></p>
+<dt><code class="docutils literal notranslate"><span class="pre">logging</span></code></dt><dd><p><code class="docutils literal notranslate"><span class="pre">config_file</span></code>, output <code class="docutils literal notranslate"><span class="pre">directory</span></code>, optional package <code class="docutils literal notranslate"><span class="pre">level</span></code>, and raw
+broker logging. See <a class="reference internal" href="logging.html"><span class="doc">Logging</span></a>.</p>
 </dd>
-<dt><kbd>-n, --nuke</kbd></dt>
-<dd><p>Cancel all orders and close positions then stop trading.</p>
-<p>Default: <code class="docutils literal notranslate"><span class="pre">False</span></code></p>
+<dt><code class="docutils literal notranslate"><span class="pre">controller</span></code></dt><dd><p>One-run actions under <code class="docutils literal notranslate"><span class="pre">controller.startup</span></code>, synchronization, health checks,
+execution verification, error filtering, unknown-trade policy, bracket
+policy, and futures-roll time.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">state_machine</span></code></dt><dd><p>Save delay, Mongo collection names, and rejected-order limit.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">storage</span></code></dt><dd><p>Base directory plus Mongo client arguments and the framework database name.
+Dataframe library names and save frequency belong to strategy composition
+and consumer constructors.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">blotter</span></code></dt><dd><p>Enablement and a safe built-in <code class="docutils literal notranslate"><span class="pre">csv</span></code> or <code class="docutils literal notranslate"><span class="pre">mongo</span></code> saver specification.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">orders</span></code></dt><dd><p>Default IB fields for open, close, stop, and take-profit orders, plus the
+default OCA type.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">timeout</span></code></dt><dd><p>Default streamer timeout in seconds and the <code class="docutils literal notranslate"><span class="pre">restart</span></code> or <code class="docutils literal notranslate"><span class="pre">log</span></code> action.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">futures</span></code></dt><dd><p><code class="docutils literal notranslate"><span class="pre">futures_roll_bdays</span></code> controls when the selector advances <code class="docutils literal notranslate"><span class="pre">ACTIVE</span></code> and
+positions outside the allowed <code class="docutils literal notranslate"><span class="pre">ACTIVE</span></code>/<code class="docutils literal notranslate"><span class="pre">NEXT</span></code> set become eligible for
+rolling. <code class="docutils literal notranslate"><span class="pre">futures_roll_margin_bdays</span></code> advances <code class="docutils literal notranslate"><span class="pre">NEXT</span></code> earlier so strategy
+atoms may route new entries away from the expiring contract while market
+data and existing positions remain on <code class="docutils literal notranslate"><span class="pre">ACTIVE</span></code>. Selector dates are
+evaluated as timezone-naive UTC and refreshed on supervised workload start.</p>
 </dd>
 </dl>
 </section>
-<p><p>Defaults will be used for all unset parameters.</p>
-</p>
-<section id="examples">
-<h4>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h4>
-<div class="literal-block-wrapper docutils container" id="id6">
-<div class="code-block-caption"><span class="caption-text">Running a strategy with a config override</span><a class="headerlink" href="#id6" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>my_strategy.py<span class="w"> </span>-f<span class="w"> </span>config_overrides.yaml
-</pre></div>
-</div>
-</div>
-<p>This runs the strategy defined in <code class="docutils literal notranslate"><span class="pre">my_strategy.py</span></code> with configuration overrides from <code class="docutils literal notranslate"><span class="pre">config_overrides.yaml</span></code> in the current directory.</p>
-<div class="literal-block-wrapper docutils container" id="id7">
-<div class="code-block-caption"><span class="caption-text">Triggering the emergency circuit breaker</span><a class="headerlink" href="#id7" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>my_strategy.py<span class="w"> </span>--nuke
-</pre></div>
-</div>
-</div>
-<p>This activates the emergency circuit breaker, closing all open positions, canceling resting orders, and preventing new positions.</p>
-<div class="literal-block-wrapper docutils container" id="id8">
-<div class="code-block-caption"><span class="caption-text">Changing the log location</span><a class="headerlink" href="#id8" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>my_strategy.py<span class="w"> </span>-s<span class="w"> </span>logging_path<span class="w"> </span>/path/to/log
-</pre></div>
-</div>
-</div>
-<p>This changes the log location to <code class="docutils literal notranslate"><span class="pre">/path/to/log</span></code>.</p>
-</section>
-</section>
-<section id="dataloader-cli-options">
-<h3>Dataloader CLI Options<a class="headerlink" href="#dataloader-cli-options" title="Link to this heading">¶</a></h3>
-<p>Dataloader options differ from those of other modules:</p>
-<p><p>Primary way to set up appplication is through a yaml file, or environment variables. Command line options listed here override those default settings.</p>
-</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">usage</span><span class="p">:</span> <span class="n">dataloader</span><span class="o">.</span><span class="n">py</span> <span class="p">[</span><span class="o">-</span><span class="n">h</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">s</span> <span class="n">KEY</span> <span class="n">VALUE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">f</span> <span class="n">FILE</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">g</span><span class="p">]</span> <span class="p">[</span><span class="o">-</span><span class="n">w</span><span class="p">]</span> <span class="p">[</span><span class="n">source</span><span class="p">]</span>
-</pre></div>
-</div>
-<section id="haymaker.config.cli_options-get_parser_for_dataloader-positional-arguments">
-<h4>Positional Arguments<a class="headerlink" href="#haymaker.config.cli_options-get_parser_for_dataloader-positional-arguments" title="Link to this heading">¶</a></h4>
-<dl class="option-list">
-<dt><kbd>source</kbd></dt>
-<dd><p>Optional file with source data.</p>
+<section id="dataloader-configuration">
+<h2>Dataloader Configuration<a class="headerlink" href="#dataloader-configuration" title="Link to this heading">¶</a></h2>
+<p>Dataloader configuration shares the <code class="docutils literal notranslate"><span class="pre">connection</span></code> and <code class="docutils literal notranslate"><span class="pre">logging</span></code> section
+shapes with live execution. Its narrower <code class="docutils literal notranslate"><span class="pre">storage</span></code> section contains only
+<code class="docutils literal notranslate"><span class="pre">base_directory</span></code> and <code class="docutils literal notranslate"><span class="pre">mongodb.client</span></code>. <code class="docutils literal notranslate"><span class="pre">mongodb.database</span></code> is live-only;
+dataframe library and save-frequency settings are not framework configuration.
+All of those unsupported paths are rejected.</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">storage</span></code></dt><dd><p>Base directory and keyword arguments passed to <code class="docutils literal notranslate"><span class="pre">pymongo.MongoClient</span></code>. The
+dataloader derives its Arctic library name from the requested data type and
+bar size, so no library name is configured here.</p>
 </dd>
 </dl>
-</section>
-<section id="haymaker.config.cli_options-get_parser_for_dataloader-named-arguments">
-<h4>Named Arguments<a class="headerlink" href="#haymaker.config.cli_options-get_parser_for_dataloader-named-arguments" title="Link to this heading">¶</a></h4>
-<dl class="option-list">
-<dt><kbd>-s, --set_option</kbd></dt>
-<dd><p>Use provided KEY VALUE pair to set parameter KEY to VALUE.</p>
+<p>The remaining dataloader groups are:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">download</span></code></dt><dd><p>Source CSV, bar size, data type, lookback and gap-fill policy, RTH selection,
+save cadence, and worker count. This user-facing run group is composed into
+the dataloader manager and worker session.</p>
 </dd>
-<dt><kbd>-f, --file</kbd></dt>
-<dd><p>Name of .yaml file with settings (which must exist in the current directory).</p>
+<dt><code class="docutils literal notranslate"><span class="pre">pacing</span></code></dt><dd><p>Optional pacing bypass and the fraction of IB request capacity assigned to
+the dataloader.</p>
 </dd>
-<dt><kbd>-g, --fill_gaps</kbd></dt>
-<dd><p>Whether dataloader should attempt to patch any existing gap in data.</p>
-<p>Default: <code class="docutils literal notranslate"><span class="pre">False</span></code></p>
-</dd>
-<dt><kbd>-w, --watchdog</kbd></dt>
-<dd><p>Whether watchdog should be used to monitor ib_gateway.</p>
-<p>Default: <code class="docutils literal notranslate"><span class="pre">False</span></code></p>
+<dt><code class="docutils literal notranslate"><span class="pre">futures</span></code></dt><dd><p>Contract selector, full-chain marker, and current-contract index.</p>
 </dd>
 </dl>
+<p>Unknown dataloader <code class="docutils literal notranslate"><span class="pre">storage</span></code> keys fail during configuration loading; unknown
+keys in <code class="docutils literal notranslate"><span class="pre">download</span></code>, <code class="docutils literal notranslate"><span class="pre">pacing</span></code>, or <code class="docutils literal notranslate"><span class="pre">futures</span></code> fail during runtime
+construction. Target constructors also enforce value types and ranges,
+including positive worker/save counts, an optional positive lookback, booleans
+for boolean policies, a finite positive pacing allowance, and valid futures
+selector values.</p>
 </section>
-<p><p>Defaults will be used for all unset parameters.</p>
-</p>
-<section id="id1">
-<h4>Examples<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
-<div class="literal-block-wrapper docutils container" id="id9">
-<div class="code-block-caption"><span class="caption-text">Collecting historical data from a CSV</span><a class="headerlink" href="#id9" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>my_list.csv
-</pre></div>
-</div>
-</div>
-<p>This runs the dataloader to collect historical data for contracts defined in <code class="docutils literal notranslate"><span class="pre">my_list.csv</span></code>.</p>
-<div class="literal-block-wrapper docutils container" id="id10">
-<div class="code-block-caption"><span class="caption-text">Running dataloader with a custom settings file</span><a class="headerlink" href="#id10" title="Link to this code">¶</a></div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dataloader<span class="w"> </span>-f<span class="w"> </span>settings.yaml
-</pre></div>
-</div>
-</div>
-<p>This runs the dataloader with settings from <code class="docutils literal notranslate"><span class="pre">settings.yaml</span></code> in the current directory. This file should be a modified copy of:
-<a class="reference external" href="https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml">https://github/t1user/haymaker/blob/master/haymaker/config/dataloader_base_config.yaml</a></p>
-<p>specifying the source file with defined contracts, data type, frequency, etc.</p>
+<section id="safe-object-conversion">
+<h2>Safe Object Conversion<a class="headerlink" href="#safe-object-conversion" title="Link to this heading">¶</a></h2>
+<p>YAML contains plain data only. <code class="docutils literal notranslate"><span class="pre">ConnectionSettings.from_mapping()</span></code> converts
+the <code class="docutils literal notranslate"><span class="pre">connection.probe_contract</span></code> mapping to an
+<a class="reference external" href="https://ib-insync.readthedocs.io/api.html#ib_insync.contract.Contract" title="(in ib_insync v0.9)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.contract.Contract</span></code></a>, while <code class="docutils literal notranslate"><span class="pre">OrderDefaults.from_mapping()</span></code>
+converts order <code class="docutils literal notranslate"><span class="pre">algoParams</span></code> entries to
+<code class="xref py py-class docutils literal notranslate"><span class="pre">ib_insync.objects.TagValue</span></code> instances and verifies that each mapping can
+construct an IB order. Arbitrary Python object constructors and executable YAML
+tags are rejected.</p>
 </section>
-</section>
+<section id="migration-from-the-legacy-schema">
+<h2>Migration from the Legacy Schema<a class="headerlink" href="#migration-from-the-legacy-schema" title="Link to this heading">¶</a></h2>
+<p>The former flat configuration API and import-time <code class="docutils literal notranslate"><span class="pre">CONFIG</span></code> object have been
+removed. Common migrations include:</p>
+<div class="table-wrapper docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Legacy key or command</p></th>
+<th class="head"><p>Replacement</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">app.host</span></code> / top-level <code class="docutils literal notranslate"><span class="pre">host</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">connection.host</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">clientId</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">connection.client_id</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">logging_config</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">logging.config_file</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">logging_path</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">logging.directory</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">data_folder</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">storage.base_directory</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">storage.block_library</span></code></p></td>
+<td><p>Select the library explicitly in the strategy’s
+<code class="docutils literal notranslate"><span class="pre">FrameStoreProvider.queued_sink()</span></code> call</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">storage.market_data_library</span></code></p></td>
+<td><p>Select the library explicitly in the strategy’s
+<code class="docutils literal notranslate"><span class="pre">FrameStoreProvider.datastore()</span></code> call</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">storage.dataframe_save_frequency</span></code></p></td>
+<td><p>Pass <code class="docutils literal notranslate"><span class="pre">save_frequency</span></code> to <code class="docutils literal notranslate"><span class="pre">DfAggregator</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">barSize</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">download.bar_size</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">wts</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">download.what_to_show</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">useRTH</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">download.use_rth</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pacer_allowance_fraction</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">pacing.allowance_fraction</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>top-level <code class="docutils literal notranslate"><span class="pre">startup.reset</span></code> and related startup paths</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">controller.startup.reset</span></code> and related startup paths</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-s</span> <span class="pre">key</span> <span class="pre">value</span></code> with a flat key</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-s</span> <span class="pre">section.key</span> <span class="pre">value</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Code that imported <code class="docutils literal notranslate"><span class="pre">haymaker.config.CONFIG</span></code> should instead receive a ready
+runtime service. Framework composition uses <code class="docutils literal notranslate"><span class="pre">load_live_config()</span></code> and passes
+each section to its owning target or subsystem composition boundary; user
+strategy code normally does not need direct access to framework configuration.</p>
 </section>
 </section>
 
@@ -520,25 +602,19 @@
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Configuration</a><ul>
+<li><a class="reference internal" href="#precedence">Precedence</a></li>
 <li><a class="reference internal" href="#default-configuration-files">Default Configuration Files</a></li>
-<li><a class="reference internal" href="#user-provided-configuration-file">User-Provided Configuration File</a></li>
-<li><a class="reference internal" href="#environment-variables">Environment Variables</a></li>
-<li><a class="reference internal" href="#overriding-defaults-examples">Overriding Defaults - Examples</a></li>
-<li><a class="reference internal" href="#passing-key-value-pairs-from-command-line">Passing Key-Value Pairs from Command Line</a><ul>
-<li><a class="reference internal" href="#cli-options">CLI Options</a><ul>
+<li><a class="reference internal" href="#framework-and-strategy-configuration">Framework and Strategy Configuration</a></li>
+<li><a class="reference internal" href="#yaml-override-files">YAML Override Files</a></li>
+<li><a class="reference internal" href="#command-line-overrides">Command-Line Overrides</a><ul>
 <li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_other_module-positional-arguments">Positional Arguments</a></li>
 <li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_other_module-named-arguments">Named Arguments</a></li>
-<li><a class="reference internal" href="#examples">Examples</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#dataloader-cli-options">Dataloader CLI Options</a><ul>
-<li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_dataloader-positional-arguments">Positional Arguments</a></li>
-<li><a class="reference internal" href="#haymaker.config.cli_options-get_parser_for_dataloader-named-arguments">Named Arguments</a></li>
-<li><a class="reference internal" href="#id1">Examples</a></li>
-</ul>
-</li>
-</ul>
-</li>
+<li><a class="reference internal" href="#live-configuration">Live Configuration</a></li>
+<li><a class="reference internal" href="#dataloader-configuration">Dataloader Configuration</a></li>
+<li><a class="reference internal" href="#safe-object-conversion">Safe Object Conversion</a></li>
+<li><a class="reference internal" href="#migration-from-the-legacy-schema">Migration from the Legacy Schema</a></li>
 </ul>
 </li>
 </ul>

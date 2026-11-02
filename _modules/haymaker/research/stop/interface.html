@@ -197,6 +197,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../../installation.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../configuration.html">Configuration</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../logging.html">Logging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../supervisor.html">Connection Supervisor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ib_message_codes.html">IB Message Codes</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../../execution.html">Execution Module</a><input aria-label="Toggle navigation of Execution Module" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="simple">
 </ul>
 </li>
@@ -262,7 +264,7 @@
 
 <span class="n">DistanceLike</span> <span class="o">=</span> <span class="nb">float</span> <span class="o">|</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span>
 <span class="n">TimedeltaLike</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span> <span class="o">|</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span>
-<span class="n">TransactionMethod</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;numpy&quot;</span><span class="p">,</span> <span class="s2">&quot;pandas&quot;</span><span class="p">]</span>
+<span class="n">TransactionMethod</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"numpy"</span><span class="p">,</span> <span class="s2">"pandas"</span><span class="p">]</span>
 <span class="n">DEFAULT_SESSION_GAP</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
 
 
@@ -285,31 +287,31 @@
     <span class="n">scheduled_close</span><span class="p">:</span> <span class="n">ScheduledCloseLike</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;df must be a pandas DataFrame&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="p">{</span><span class="s2">&quot;high&quot;</span><span class="p">,</span> <span class="s2">&quot;low&quot;</span><span class="p">}</span><span class="o">.</span><span class="n">issubset</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;df must have columns: &#39;high&#39;, &#39;low&#39;&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="s2">&quot;position&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span> <span class="ow">and</span> <span class="s2">&quot;blip&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;df must have either column &#39;position&#39; or &#39;blip&#39;&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"df must be a pandas DataFrame"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">{</span><span class="s2">"high"</span><span class="p">,</span> <span class="s2">"low"</span><span class="p">}</span><span class="o">.</span><span class="n">issubset</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"df must have columns: 'high', 'low'"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">"position"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span> <span class="ow">and</span> <span class="s2">"blip"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"df must have either column 'position' or 'blip'"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">price_column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;&#39;</span><span class="si">{</span><span class="n">price_column</span><span class="si">}</span><span class="s2">&#39; indicated as price column, but not in df&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"'</span><span class="si">{</span><span class="n">price_column</span><span class="si">}</span><span class="s2">' indicated as price column, but not in df"</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">distance</span><span class="p">,</span> <span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">int</span><span class="p">)):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;distance must be series or number, not </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">distance</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"distance must be series or number, not </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">distance</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">distance</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">distance</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">equals</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;distance Series must have the same index as df. Align or upsample &quot;</span>
-            <span class="s2">&quot;distance explicitly before calling stop_loss.&quot;</span>
+            <span class="s2">"distance Series must have the same index as df. Align or upsample "</span>
+            <span class="s2">"distance explicitly before calling stop_loss."</span>
         <span class="p">)</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">scheduled_close</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">):</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">scheduled_close</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">equals</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;scheduled_close Series must have the same index as df.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"scheduled_close Series must have the same index as df."</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">scheduled_close</span><span class="o">.</span><span class="n">isna</span><span class="p">()</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;scheduled_close Series must not contain n/a values.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"scheduled_close Series must not contain n/a values."</span><span class="p">)</span>
     <span class="k">elif</span> <span class="n">scheduled_close</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span>
         <span class="n">scheduled_close</span><span class="p">,</span> <span class="p">(</span><span class="n">dt</span><span class="o">.</span><span class="n">time</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">,</span> <span class="n">BeforeClose</span><span class="p">)</span>
     <span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;scheduled_close must be datetime.time, tuple, pandas Series, &quot;</span>
-            <span class="s2">&quot;BeforeClose, or None.&quot;</span>
+            <span class="s2">"scheduled_close must be datetime.time, tuple, pandas Series, "</span>
+            <span class="s2">"BeforeClose, or None."</span>
         <span class="p">)</span>
 
 
@@ -329,9 +331,9 @@
         <span class="k">return</span> <span class="n">dt</span><span class="o">.</span><span class="n">time</span><span class="p">(</span><span class="o">*</span><span class="n">value</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
     <span class="k">except</span> <span class="p">(</span><span class="ne">TypeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">)</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;scheduled_close tuple must be acceptable by datetime.time.&quot;</span>
+            <span class="s2">"scheduled_close tuple must be acceptable by datetime.time."</span>
         <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">exc</span>
-    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;scheduled_close tuple must be acceptable by datetime.time.&quot;</span><span class="p">)</span>
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"scheduled_close tuple must be acceptable by datetime.time."</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_scheduled_close_data</span><span class="p">(</span>
@@ -343,13 +345,13 @@
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">scheduled_close</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">scheduled_close</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">bool_</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;scheduled_close as time or tuple requires a DatetimeIndex.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"scheduled_close as time or tuple requires a DatetimeIndex."</span><span class="p">)</span>
     <span class="n">close_time</span> <span class="o">=</span> <span class="n">_scheduled_close_time</span><span class="p">(</span><span class="n">scheduled_close</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">close_time</span><span class="o">.</span><span class="n">tzinfo</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">index</span><span class="o">.</span><span class="n">time</span> <span class="o">==</span> <span class="n">close_time</span>
     <span class="k">if</span> <span class="n">index</span><span class="o">.</span><span class="n">tz</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;timezone-aware scheduled_close requires a timezone-aware DatetimeIndex.&quot;</span>
+            <span class="s2">"timezone-aware scheduled_close requires a timezone-aware DatetimeIndex."</span>
         <span class="p">)</span>
     <span class="n">index_in_close_timezone</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">tz_convert</span><span class="p">(</span><span class="n">close_time</span><span class="o">.</span><span class="n">tzinfo</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">index_in_close_timezone</span><span class="o">.</span><span class="n">time</span> <span class="o">==</span> <span class="n">close_time</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">tzinfo</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
@@ -359,9 +361,9 @@
     <span class="k">try</span><span class="p">:</span>
         <span class="n">delta</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
     <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must be a valid timedelta.&quot;</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">exc</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must be a valid timedelta."</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">exc</span>
     <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">isna</span><span class="p">(</span><span class="n">delta</span><span class="p">)</span> <span class="ow">or</span> <span class="n">delta</span> <span class="o">&lt;=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="mi">0</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must be a positive timedelta.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must be a positive timedelta."</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">delta</span>
 
 
@@ -373,17 +375,17 @@
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_infer_bar_duration</span><span class="p">(</span><span class="n">index</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">:</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">index</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;before_close requires at least two rows to infer frequency.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"before_close requires at least two rows to infer frequency."</span><span class="p">)</span>
     <span class="n">deltas</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">-</span> <span class="n">index</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
     <span class="n">positive_deltas</span> <span class="o">=</span> <span class="n">deltas</span><span class="p">[</span><span class="n">deltas</span> <span class="o">&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="mi">0</span><span class="p">)]</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">positive_deltas</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Could not infer data frequency from index.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Could not infer data frequency from index."</span><span class="p">)</span>
     <span class="n">modes</span> <span class="o">=</span> <span class="n">positive_deltas</span><span class="o">.</span><span class="n">to_series</span><span class="p">()</span><span class="o">.</span><span class="n">mode</span><span class="p">()</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">modes</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Could not infer a unique data frequency from index.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Could not infer a unique data frequency from index."</span><span class="p">)</span>
     <span class="n">duration</span> <span class="o">=</span> <span class="n">modes</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
     <span class="k">if</span> <span class="n">duration</span> <span class="o">&gt;=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;before_close only supports intraday data.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"before_close only supports intraday data."</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">duration</span>
 
 
@@ -391,7 +393,7 @@
 <a class="viewcode-back" href="../../../../research/stop.html#haymaker.research.stop.BeforeClose">[docs]</a>
 <span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">BeforeClose</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Lazy scheduled-close mask builder for bars before session end.</span>
 
 <span class="sd">    Instances are accepted by ``stop_loss(..., scheduled_close=...)``.</span>
@@ -407,19 +409,19 @@
 <span class="sd">    session_gap:</span>
 <span class="sd">        Positive timedelta. A gap larger than this value starts a new</span>
 <span class="sd">        session. Defaults to 30 minutes.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">offset</span><span class="p">:</span> <span class="n">TimedeltaLike</span>
     <span class="n">session_gap</span><span class="p">:</span> <span class="n">TimedeltaLike</span> <span class="o">=</span> <span class="n">DEFAULT_SESSION_GAP</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span> <span class="o">|</span> <span class="n">pd</span><span class="o">.</span><span class="n">Index</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Build a scheduled-close mask for the supplied data or index.</span>
 
 <span class="sd">        The helper is intended for intraday left-labeled bars, where</span>
 <span class="sd">        each timestamp marks the start of the bar. It infers the bar</span>
 <span class="sd">        duration as the unique mode of positive index differences. Each</span>
-<span class="sd">        session&#39;s end is inferred as the last bar timestamp plus that</span>
+<span class="sd">        session's end is inferred as the last bar timestamp plus that</span>
 <span class="sd">        duration. Rows whose timestamps are at or after</span>
 <span class="sd">        ``session_end - offset`` are marked ``True`` through the final</span>
 <span class="sd">        bar of that session.</span>
@@ -427,21 +429,21 @@
 <span class="sd">        Returns:</span>
 <span class="sd">        --------</span>
 <span class="sd">        pd.Series</span>
-<span class="sd">            Boolean mask named ``&quot;scheduled_close&quot;``.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">            Boolean mask named ``"scheduled_close"``.</span>
+<span class="sd">        """</span>
 
         <span class="n">index</span> <span class="o">=</span> <span class="n">_data_index</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;before_close requires a DatetimeIndex.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"before_close requires a DatetimeIndex."</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">index</span><span class="o">.</span><span class="n">is_monotonic_increasing</span> <span class="ow">or</span> <span class="n">index</span><span class="o">.</span><span class="n">has_duplicates</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;before_close requires a strictly increasing index.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"before_close requires a strictly increasing index."</span><span class="p">)</span>
 
-        <span class="n">close_offset</span> <span class="o">=</span> <span class="n">_as_positive_timedelta</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">offset</span><span class="p">,</span> <span class="s2">&quot;offset&quot;</span><span class="p">)</span>
-        <span class="n">gap</span> <span class="o">=</span> <span class="n">_as_positive_timedelta</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">session_gap</span><span class="p">,</span> <span class="s2">&quot;session_gap&quot;</span><span class="p">)</span>
+        <span class="n">close_offset</span> <span class="o">=</span> <span class="n">_as_positive_timedelta</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">offset</span><span class="p">,</span> <span class="s2">"offset"</span><span class="p">)</span>
+        <span class="n">gap</span> <span class="o">=</span> <span class="n">_as_positive_timedelta</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">session_gap</span><span class="p">,</span> <span class="s2">"session_gap"</span><span class="p">)</span>
         <span class="n">duration</span> <span class="o">=</span> <span class="n">_infer_bar_duration</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">gap</span> <span class="o">&lt;</span> <span class="n">duration</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;session_gap must not be shorter than inferred data frequency.&quot;</span>
+                <span class="s2">"session_gap must not be shorter than inferred data frequency."</span>
             <span class="p">)</span>
 
         <span class="n">deltas</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">-</span> <span class="n">index</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
@@ -449,16 +451,16 @@
             <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">flatnonzero</span><span class="p">(</span><span class="n">deltas</span> <span class="o">&gt;</span> <span class="n">gap</span><span class="p">),</span> <span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">index</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">])</span>
         <span class="p">)</span>
         <span class="n">row_locs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
-        <span class="n">row_session_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">session_end_locs</span><span class="p">,</span> <span class="n">row_locs</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+        <span class="n">row_session_ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">session_end_locs</span><span class="p">,</span> <span class="n">row_locs</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">"left"</span><span class="p">)</span>
 
-        <span class="n">index_ns</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;datetime64[ns]&quot;</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span>
+        <span class="n">index_ns</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="s2">"datetime64[ns]"</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span>
             <span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span>
         <span class="p">)</span>
         <span class="n">session_end_ns</span> <span class="o">=</span> <span class="n">index_ns</span><span class="p">[</span><span class="n">session_end_locs</span><span class="p">[</span><span class="n">row_session_ids</span><span class="p">]]</span> <span class="o">+</span> <span class="n">duration</span><span class="o">.</span><span class="n">value</span>
         <span class="n">close_window_start_ns</span> <span class="o">=</span> <span class="n">session_end_ns</span> <span class="o">-</span> <span class="n">close_offset</span><span class="o">.</span><span class="n">value</span>
         <span class="n">close_mask</span> <span class="o">=</span> <span class="n">index_ns</span> <span class="o">&gt;=</span> <span class="n">close_window_start_ns</span>
 
-        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">close_mask</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;scheduled_close&quot;</span><span class="p">)</span></div>
+        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">close_mask</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"scheduled_close"</span><span class="p">)</span></div>
 
 
 
@@ -469,7 +471,7 @@
     <span class="o">*</span><span class="p">,</span>
     <span class="n">session_gap</span><span class="p">:</span> <span class="n">TimedeltaLike</span> <span class="o">=</span> <span class="n">DEFAULT_SESSION_GAP</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BeforeClose</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Create a lazy scheduled-close mask builder for ``stop_loss``.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Create a lazy scheduled-close mask builder for ``stop_loss``."""</span>
     <span class="k">return</span> <span class="n">BeforeClose</span><span class="p">(</span><span class="n">offset</span><span class="o">=</span><span class="n">offset</span><span class="p">,</span> <span class="n">session_gap</span><span class="o">=</span><span class="n">session_gap</span><span class="p">)</span></div>
 
 
@@ -492,10 +494,10 @@
     <span class="n">scheduled_close</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
     <span class="n">transaction_method</span><span class="p">:</span> <span class="n">TransactionMethod</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PreparedData</span><span class="p">:</span>
-    <span class="n">position_series</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;position&quot;</span><span class="p">]</span>
+    <span class="n">position_series</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"position"</span><span class="p">]</span>
     <span class="n">position</span> <span class="o">=</span> <span class="n">position_series</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">transaction_method</span> <span class="o">==</span> <span class="s2">&quot;numpy&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">transaction_method</span> <span class="o">==</span> <span class="s2">"numpy"</span><span class="p">:</span>
         <span class="n">transaction</span> <span class="o">=</span> <span class="n">pos_trans_array</span><span class="p">(</span><span class="n">position</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">transaction</span> <span class="o">=</span> <span class="n">pos_trans</span><span class="p">(</span><span class="n">position_series</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
@@ -503,8 +505,8 @@
     <span class="k">return</span> <span class="n">PreparedData</span><span class="p">(</span>
         <span class="n">first</span><span class="o">=</span><span class="n">position</span><span class="p">,</span>
         <span class="n">second</span><span class="o">=</span><span class="n">transaction</span><span class="p">,</span>
-        <span class="n">high</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;high&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
-        <span class="n">low</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;low&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">high</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">"high"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">low</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">"low"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
         <span class="n">price</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="n">price_column</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
         <span class="n">distance</span><span class="o">=</span><span class="n">_distance_data</span><span class="p">(</span><span class="n">distance</span><span class="p">),</span>
         <span class="n">scheduled_close</span><span class="o">=</span><span class="n">scheduled_close</span><span class="p">,</span>
@@ -519,17 +521,17 @@
     <span class="n">distance</span><span class="p">:</span> <span class="n">DistanceLike</span><span class="p">,</span>
     <span class="n">scheduled_close</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PreparedData</span><span class="p">:</span>
-    <span class="n">blip</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;blip&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">()</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="n">blip</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">"blip"</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">()</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
     <span class="n">close_blip</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;close_blip&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">()</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
-        <span class="k">if</span> <span class="s2">&quot;close_blip&quot;</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">"close_blip"</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">()</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s2">"close_blip"</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span>
         <span class="k">else</span> <span class="n">blip</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">PreparedData</span><span class="p">(</span>
         <span class="n">first</span><span class="o">=</span><span class="n">blip</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
         <span class="n">second</span><span class="o">=</span><span class="n">close_blip</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
-        <span class="n">high</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;high&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
-        <span class="n">low</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;low&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">high</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">"high"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">low</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="s2">"low"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
         <span class="n">price</span><span class="o">=</span><span class="n">df</span><span class="p">[</span><span class="n">price_column</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
         <span class="n">distance</span><span class="o">=</span><span class="n">_distance_data</span><span class="p">(</span><span class="n">distance</span><span class="p">),</span>
         <span class="n">scheduled_close</span><span class="o">=</span><span class="n">scheduled_close</span><span class="p">,</span>
@@ -543,10 +545,10 @@
     <span class="n">distance</span><span class="p">:</span> <span class="n">DistanceLike</span><span class="p">,</span>
     <span class="n">price_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">scheduled_close</span><span class="p">:</span> <span class="n">ScheduledCloseLike</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">transaction_method</span><span class="p">:</span> <span class="n">TransactionMethod</span> <span class="o">=</span> <span class="s2">&quot;numpy&quot;</span><span class="p">,</span>
+    <span class="n">transaction_method</span><span class="p">:</span> <span class="n">TransactionMethod</span> <span class="o">=</span> <span class="s2">"numpy"</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PreparedData</span><span class="p">:</span>
     <span class="n">scheduled_close_data</span> <span class="o">=</span> <span class="n">_scheduled_close_data</span><span class="p">(</span><span class="n">scheduled_close</span><span class="p">,</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
-    <span class="k">if</span> <span class="s2">&quot;position&quot;</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+    <span class="k">if</span> <span class="s2">"position"</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">_position_data</span><span class="p">(</span>
             <span class="n">df</span><span class="p">,</span> <span class="n">price_column</span><span class="p">,</span> <span class="n">distance</span><span class="p">,</span> <span class="n">scheduled_close_data</span><span class="p">,</span> <span class="n">transaction_method</span>
         <span class="p">)</span>
@@ -558,11 +560,11 @@
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
     <span class="n">out_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
         <span class="n">result</span><span class="p">,</span>
-        <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;position&quot;</span><span class="p">,</span> <span class="s2">&quot;open_price&quot;</span><span class="p">,</span> <span class="s2">&quot;close_price&quot;</span><span class="p">,</span> <span class="s2">&quot;stop_price&quot;</span><span class="p">],</span>
+        <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">"position"</span><span class="p">,</span> <span class="s2">"open_price"</span><span class="p">,</span> <span class="s2">"close_price"</span><span class="p">,</span> <span class="s2">"stop_price"</span><span class="p">],</span>
         <span class="n">index</span><span class="o">=</span><span class="n">index</span><span class="p">,</span>
     <span class="p">)</span>
-    <span class="n">out_df</span><span class="p">[</span><span class="s2">&quot;position&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">out_df</span><span class="p">[</span><span class="s2">&quot;position&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-    <span class="n">out_df</span><span class="p">[</span><span class="s2">&quot;bar_price&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">price_series</span>
+    <span class="n">out_df</span><span class="p">[</span><span class="s2">"position"</span><span class="p">]</span> <span class="o">=</span> <span class="n">out_df</span><span class="p">[</span><span class="s2">"position"</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="n">copy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">out_df</span><span class="p">[</span><span class="s2">"bar_price"</span><span class="p">]</span> <span class="o">=</span> <span class="n">price_series</span>
     <span class="k">return</span> <span class="n">out_df</span>
 
 
@@ -571,15 +573,15 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">stop_loss</span><span class="p">(</span>
     <span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">distance</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span>
-    <span class="n">mode</span><span class="p">:</span> <span class="n">StopMode</span> <span class="o">=</span> <span class="s2">&quot;trail&quot;</span><span class="p">,</span>
+    <span class="n">mode</span><span class="p">:</span> <span class="n">StopMode</span> <span class="o">=</span> <span class="s2">"trail"</span><span class="p">,</span>
     <span class="n">tp_multiple</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
     <span class="n">adjust</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">StopMode</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">time_stop</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
     <span class="n">scheduled_close</span><span class="p">:</span> <span class="n">ScheduledCloseLike</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">price_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;open&quot;</span><span class="p">,</span>
+    <span class="n">price_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"open"</span><span class="p">,</span>
     <span class="n">use_numba</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Apply stop loss and optionally take profit to a strategy.</span>
 
 <span class="sd">    Convert a series with transactions or positions into a series with</span>
@@ -613,8 +615,8 @@
 <span class="sd">            ``df``. This function does not rescale it. If provided as a</span>
 <span class="sd">            ``pd.Series``, it must already have the same index as ``df``; this</span>
 <span class="sd">            function does not align, upsample, or forward-fill distance values.</span>
-<span class="sd">        mode: Stop-loss type to apply. Allowed values are ``&quot;fixed&quot;`` and</span>
-<span class="sd">            ``&quot;trail&quot;``.</span>
+<span class="sd">        mode: Stop-loss type to apply. Allowed values are ``"fixed"`` and</span>
+<span class="sd">            ``"trail"``.</span>
 <span class="sd">        tp_multiple: Optional take-profit distance expressed as a multiple of</span>
 <span class="sd">            ``distance``. For example, if ``tp_multiple=3``, then the</span>
 <span class="sd">            take-profit trigger is placed at ``3 * distance`` from entry. If</span>
@@ -629,9 +631,9 @@
 <span class="sd">        scheduled_close: Optional scheduled flattening instruction. If given</span>
 <span class="sd">            as ``datetime.time`` or a tuple accepted by ``datetime.time``, any</span>
 <span class="sd">            existing position is closed at ``price_column`` on matching index</span>
-<span class="sd">            times. Naive times match the index&#39;s local wall-clock time.</span>
+<span class="sd">            times. Naive times match the index's local wall-clock time.</span>
 <span class="sd">            Timezone-aware times require a timezone-aware index and match after</span>
-<span class="sd">            converting the index to the supplied time&#39;s timezone. If given as</span>
+<span class="sd">            converting the index to the supplied time's timezone. If given as</span>
 <span class="sd">            ``BeforeClose`` through the ``before_close(...)`` helper, the mask</span>
 <span class="sd">            is built lazily from ``df.index``. If given as a ``pd.Series``, it</span>
 <span class="sd">            must be a same-index boolean mask. Scheduled closes are</span>
@@ -640,8 +642,8 @@
 <span class="sd">            ``close_price``.</span>
 <span class="sd">        price_column: Name of the column containing the price at which</span>
 <span class="sd">            non-stopped and time-stopped transactions are executed. In the most</span>
-<span class="sd">            common use case this is ``&quot;open&quot;``, meaning that a bar&#39;s decision</span>
-<span class="sd">            is acted upon at the next bar&#39;s open once the relevant signal is</span>
+<span class="sd">            common use case this is ``"open"``, meaning that a bar's decision</span>
+<span class="sd">            is acted upon at the next bar's open once the relevant signal is</span>
 <span class="sd">            already known.</span>
 <span class="sd">        use_numba: If ``True``, run the stop engine through the Numba</span>
 <span class="sd">            implementation. If ``False``, use the reference Python</span>
@@ -677,7 +679,7 @@
 
 <span class="sd">        Prices are signed by trade direction to remain consistent with</span>
 <span class="sd">        downstream research code.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">_validate_inputs</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">distance</span><span class="p">,</span> <span class="n">price_column</span><span class="p">,</span> <span class="n">scheduled_close</span><span class="p">)</span>
     <span class="n">scheduled_close</span> <span class="o">=</span> <span class="n">_resolve_scheduled_close</span><span class="p">(</span><span class="n">scheduled_close</span><span class="p">,</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
