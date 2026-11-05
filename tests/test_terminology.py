@@ -57,7 +57,7 @@ def checked_lines(path: Path, text: str) -> list[str]:
     lines = text.splitlines()
     if path.suffix != ".py":
         return lines
-    literals = []
+    literals: list[ast.Constant] = []
     names = LEGACY_LITERALS.get(path.relative_to(ROOT).as_posix(), set())
     for node in ast.walk(ast.parse(text)):
         if (
@@ -83,6 +83,7 @@ def checked_lines(path: Path, text: str) -> list[str]:
     for literal in sorted(
         literals, key=lambda node: (node.lineno, node.col_offset), reverse=True
     ):
+        assert literal.end_lineno is not None and literal.end_col_offset is not None
         for index in range(literal.lineno - 1, literal.end_lineno):
             start = literal.col_offset if index == literal.lineno - 1 else 0
             end = (
