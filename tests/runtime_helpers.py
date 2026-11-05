@@ -26,7 +26,7 @@ Examples:
         contract = ibi.Future("ES", exchange="CME")
         MyAtom(contract)
 
-        assert contract in atom_runtime.contract_registry.blueprints
+        assert contract in atom_runtime.contract_registry.contract_specs
 
     def test_signal_processor_uses_fake_book(
         atom_runtime_factory, fake_book
@@ -78,6 +78,7 @@ import ib_insync as ibi
 
 from haymaker.base import Atom
 from haymaker.book import Book
+from haymaker.book.positions import SignalExecutionState
 from haymaker.config import TimeoutPolicy
 from haymaker.contract_registry import ContractRegistry
 from haymaker.controller import Controller
@@ -143,3 +144,34 @@ class AtomRuntimeHarness:
 
         self.restart_requests.append(reason)
         return True
+
+
+def signal_execution_state(**fields: Any) -> SignalExecutionState:
+    """Build a checkpointed signal fixture through the flat storage codec."""
+
+    document = {
+        "schema_version": 1,
+        "state_key": f"signal_execution:{fields['signal_key']}",
+        "state_type": "signal_execution",
+        "contract": None,
+        "filled_quantity": 0,
+        "target_quantity": None,
+        "target_created_at": None,
+        "target_contract": None,
+        "target_protection_inputs": {},
+        "position_id": None,
+        "blocked_direction": None,
+        "protection_inputs": {},
+        "updated_at": datetime.now(timezone.utc),
+        "applied_fill_keys": fields.pop("_applied_fill_keys", ()),
+        **fields,
+    }
+    return SignalExecutionState.decode(document)
+
+
+def replace_signal_state(
+    state: SignalExecutionState, **changes: Any
+) -> SignalExecutionState:
+    """Change a low-level recovery fixture without exposing envelopes in public APIs."""
+
+    return SignalExecutionState.decode({**state.encode(), **changes})

@@ -37,11 +37,11 @@ class SignalCalculation:
     """Carry user-calculated fields from which SignalModel builds a Signal.
 
     Use this as the single return type of :meth:`SignalModel.calculate_signal`.
-    SignalModel supplies source identity, the resolved Contract, SignalType, and
+    SignalModel supplies signal identity, the resolved Contract, SignalType, and
     ``created_at`` when it constructs the emitted :class:`Signal`.
 
     Args:
-        value: Finite scalar value or one-to-one entry/exit pair.
+        value: Finite scalar value or signal execution entry/exit pair.
         metadata: Optional calculated fields consumed downstream. Omit it when
             the calculation has no metadata.
         as_of: Effective observation time. For left-labelled IB bars this is
@@ -67,10 +67,10 @@ class _PandasSignalCalculation(SignalCalculation):
 
 @dataclass(eq=False)
 class SignalModel(Atom, ABC):
-    """Produce standard Signals for one logical source and Contract.
+    """Produce standard Signals for one named signal stream and Contract.
 
     Args:
-        source_key: Stable identity used by Portfolio, Book, and execution.
+        signal_key: Stable identity used by Portfolio, Book, and execution.
         contract: Contract to which generated Signals apply.
         signal_type: State-replacement or event semantics.
 
@@ -79,11 +79,11 @@ class SignalModel(Atom, ABC):
     immutable Signal envelope and emits it from :meth:`SignalModel.onData`.
 
     Raises:
-        TypeError: If ``source_key`` or ``signal_type`` has the wrong type.
-        ValueError: If ``source_key`` is empty.
+        TypeError: If ``signal_key`` or ``signal_type`` has the wrong type.
+        ValueError: If ``signal_key`` is empty.
     """
 
-    source_key: str
+    signal_key: str
     contract: ibi.Contract = field()
     signal_type: SignalType
 
@@ -91,7 +91,7 @@ class SignalModel(Atom, ABC):
         """Initialize Atom services and validate Signal identity configuration."""
 
         Atom.__init__(self)
-        self.source_key = non_empty_string(self.source_key, "source_key")
+        self.signal_key = non_empty_string(self.signal_key, "signal_key")
         if not isinstance(self.signal_type, SignalType):
             raise TypeError("signal_type must be a SignalType")
 
@@ -142,7 +142,7 @@ class SignalModel(Atom, ABC):
             raise TypeError("calculate_signal() must return SignalCalculation")
         contract = self.select_signal_contract()
         signal = Signal(
-            source_key=self.source_key,
+            signal_key=self.signal_key,
             contract=contract,
             value=calculation.value,
             signal_type=self.signal_type,
@@ -157,8 +157,8 @@ class SignalModel(Atom, ABC):
 
         The default is ``self.contract``, resolved using ``which_contract``.
         Override to return ``self.contract_selector.nth_contract(n).contract``
-        for another futures maturity, or ``self.contract_blueprint`` for a
-        custom direct Portfolio to interpret. One-to-one allocation requires a
+        for another futures maturity, or ``self.contract_spec`` for a
+        custom contract Portfolio to interpret. Signal execution allocation requires a
         qualified Contract. This selection does not change ACTIVE audit data.
         """
         return self.contract
@@ -197,8 +197,8 @@ class PandasSignalModel(SignalModel, ABC):
     """Calculate a Signal from the last row of a pandas dataframe.
 
     Args:
-        source_key: Stable logical input identity.
-        contract: Signal Contract blueprint.
+        signal_key: Stable logical input identity.
+        contract: Signal Contract contract_spec.
         signal_type: State or event semantics.
         signal_fields: Calculated row field containing a scalar Signal value,
             or an ``(entry, exit)`` field-name tuple that creates a SignalPair.
@@ -326,7 +326,7 @@ class PandasSignalModel(SignalModel, ABC):
         try:
             reference = persistence.save(
                 frame,
-                source_key=self.source_key,
+                signal_key=self.signal_key,
                 active_contract=self.contract_selector.active_contract,
                 run_started_at=self.runtime.run_started_at,
             )

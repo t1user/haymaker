@@ -1,3 +1,5 @@
+from runtime_helpers import replace_signal_state, signal_execution_state
+from haymaker.book.targets import ContractExecutionState
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -8,16 +10,15 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.blotter import Blotter
+from haymaker.enums import ExecutionMode
 from haymaker.book import (
     Book,
     FillRecord,
-    FutureRollMode,
     FutureRollStage,
     OrderInfo,
-    PositionState,
     RollParticipant,
     RollState,
-    TargetState,
+    ContractTarget,
 )
 from haymaker.saver import AbstractBaseSaver
 
@@ -31,30 +32,32 @@ def contract(con_id: int = 1) -> ibi.Future:
     )
 
 
-@pytest.mark.parametrize("source_key", [None, "alpha"])
-def test_position_queries_read_balances_without_history(book, monkeypatch, source_key):
-    """Both modes read maintained balances even when history is unavailable."""
+@pytest.mark.parametrize("signal_key", [None, "alpha"])
+def test_position_queries_read_contract_positions_without_history(
+    book, monkeypatch, signal_key
+):
+    """Both modes read maintained contract positions even when history is unavailable."""
     for con_id, quantity in ((1, 2), (2, 3)):
         trade_ = trade(order_id=con_id, con_id=con_id, quantity=quantity)
         book.save_order(
             order_info(
-                trade_, source_key=(f"{source_key}-{con_id}" if source_key else None)
+                trade_, signal_key=(f"{signal_key}-{con_id}" if signal_key else None)
             )
         )
         book.apply_fill(
             trade_, fill(trade_, exec_id=f"fill-{con_id}", quantity=quantity)
         )
-    book.update_position(
-        PositionState(
-            source_key="offset",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="offset",
             execution_model_name="model",
             contract=contract(1),
-            quantity=-1,
+            filled_quantity=-1,
         )
     )
     for method in (
         "_order_contribution",
-        "_episode_contribution",
+        "_position_contribution",
         "_roll_contribution",
         "_rebuild",
     ):
@@ -64,9 +67,9 @@ def test_position_queries_read_balances_without_history(book, monkeypatch, sourc
             Mock(side_effect=AssertionError("query rebuilt history")),
         )
     assert book.positions.by_contract() == {contract(1): 1, contract(2): 3}
-    assert book.positions.quantity(contract(1)) == 1
-    assert book.positions.quantity(contract(2)) == 3
-    assert book.positions.quantity(contract(3)) == 0
+    assert book.positions.filled_quantity(contract(1)) == 1
+    assert book.positions.filled_quantity(contract(2)) == 3
+    assert book.positions.filled_quantity(contract(3)) == 0
     result = book.positions.by_contract()
     result.clear()
     assert book.positions.by_contract() == {contract(1): 1, contract(2): 3}
@@ -128,8 +131,8 @@ def order_info(trade_: ibi.Trade, **kwargs) -> OrderInfo:
         role=kwargs.pop("role", "OPEN"),
         submitted_at=datetime.now(timezone.utc),
         execution_model_name=kwargs.pop("execution_model_name", "brackets"),
-        source_key=kwargs.pop("source_key", "alpha"),
-        position_id=kwargs.pop("position_id", "episode-1"),
+        signal_key=kwargs.pop("signal_key", "alpha"),
+        position_id=kwargs.pop("position_id", "position-1"),
         params=kwargs.pop("params", {"atr": 10}),
         **kwargs,
     )
@@ -250,13 +253,13 @@ def test_order_lookup_uses_order_id_then_perm_id(book):
     assert book.orders.by_perm_id(101) is info
 
 
-@pytest.mark.parametrize("source_key", [None, "alpha"])
-def test_shared_balances_follow_fills_not_targets(book, source_key):
+@pytest.mark.parametrize("signal_key", [None, "alpha"])
+def test_shared_contract_positions_follow_fills_not_targets(book, signal_key):
     """Partial fills, opposite executions and duplicate callbacks share accounting."""
     opening = trade(quantity=3)
-    info = book.save_order(order_info(opening, source_key=source_key))
+    info = book.save_order(order_info(opening, signal_key=signal_key))
     book.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name="model",
             contract=opening.contract,
             target_quantity=10,
@@ -267,36 +270,36 @@ def test_shared_balances_follow_fills_not_targets(book, source_key):
     assert book.apply_fill(opening, first)
     assert not book.apply_fill(opening, first)
     book.save_order(info)
-    assert book.positions.quantity(opening.contract) == 1
+    assert book.positions.filled_quantity(opening.contract) == 1
     book.apply_fill(opening, fill(opening, exec_id="second", quantity=2))
     closing = trade(order_id=2, side="SELL", quantity=4)
-    book.save_order(order_info(closing, source_key=source_key, role="CLOSE"))
+    book.save_order(order_info(closing, signal_key=signal_key, role="CLOSE"))
     book.apply_fill(closing, fill(closing, exec_id="close", quantity=3))
-    assert book.positions.quantity(opening.contract) == 0
+    assert book.positions.filled_quantity(opening.contract) == 0
     assert book.positions.by_contract() == {}
-    # Same Contract, new execution; a zero balance is not an accounting cutoff.
+    # Same Contract, new execution; a zero contract_position is not an accounting cutoff.
     book.apply_fill(closing, fill(closing, exec_id="short", quantity=1))
-    assert book.positions.quantity(opening.contract) == -1
+    assert book.positions.filled_quantity(opening.contract) == -1
 
 
-@pytest.mark.parametrize("source_key", [None, "alpha"])
-def test_balance_write_interruption_recovers_without_double_fill(
-    book, order_saver, state_saver, monkeypatch, source_key
+@pytest.mark.parametrize("signal_key", [None, "alpha"])
+def test_contract_position_write_interruption_recovers_without_double_fill(
+    book, order_saver, state_saver, monkeypatch, signal_key
 ):
-    """Order/episode evidence recovers a missing subsequent balance write."""
+    """Order/position evidence recovers a missing subsequent contract_position write."""
     opening = trade()
-    book.save_order(order_info(opening, source_key=source_key))
+    book.save_order(order_info(opening, signal_key=signal_key))
     saved = state_saver.save
 
     def interrupted(document):
-        """Simulate process loss after evidence but before the derived balance."""
-        if document.get("state_type") == "balance":
-            raise RuntimeError("interrupted balance write")
+        """Simulate process loss after evidence but before the derived contract_position."""
+        if document.get("state_type") == "contract_position":
+            raise RuntimeError("interrupted contract_position write")
         saved(document)
 
     execution = fill(opening)
     monkeypatch.setattr(state_saver, "save", interrupted)
-    with pytest.raises(RuntimeError, match="interrupted balance"):
+    with pytest.raises(RuntimeError, match="interrupted contract_position"):
         book.apply_fill(opening, execution)
     monkeypatch.setattr(state_saver, "save", saved)
     for _ in range(2):
@@ -306,40 +309,48 @@ def test_balance_write_interruption_recovers_without_double_fill(
             save_async=False,
             restore=True,
         )
-        assert recovered.positions.quantity(opening.contract) == 1
+        assert recovered.positions.filled_quantity(opening.contract) == 1
         assert not recovered.apply_fill(opening, execution)
-        assert recovered.positions.quantity(opening.contract) == 1
-    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 1
+        assert recovered.positions.filled_quantity(opening.contract) == 1
+    assert (
+        state_saver.read({"state_key": "contract_position:1"})[0]["filled_quantity"]
+        == 1
+    )
 
 
-@pytest.mark.parametrize("source_key", [None, "alpha"])
+@pytest.mark.parametrize("signal_key", [None, "alpha"])
 @pytest.mark.parametrize("saved_quantity", [None, -10, 10])
-def test_restore_verifies_missing_or_inconsistent_balance(
-    book, order_saver, state_saver, source_key, saved_quantity
+def test_restore_verifies_missing_or_inconsistent_contract_position(
+    book, order_saver, state_saver, signal_key, saved_quantity
 ):
-    """The recovery balance is derived from accounting evidence, not a stale total."""
+    """The recovery contract_position is derived from accounting evidence, not a stale total."""
     opening = trade()
-    book.save_order(order_info(opening, source_key=source_key))
+    book.save_order(order_info(opening, signal_key=signal_key))
     book.apply_fill(opening, fill(opening))
-    balance = state_saver.store["state"].pop("balance:1")
+    contract_position = state_saver.store["state"].pop("contract_position:1")
     if saved_quantity is not None:
-        state_saver.save({**balance, "quantity": saved_quantity})
+        state_saver.save({**contract_position, "filled_quantity": saved_quantity})
     recovered = Book(
         order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
     )
     assert recovered.positions.by_contract() == {opening.contract: 1}
-    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 1
+    assert (
+        state_saver.read({"state_key": "contract_position:1"})[0]["filled_quantity"]
+        == 1
+    )
 
 
-def test_balance_restore_keeps_reconciled_episode_quantity(
+def test_contract_position_restore_keeps_reconciled_position_quantity(
     book, order_saver, state_saver
 ):
-    """A broker correction must not be undone by replaying old episode fills."""
+    """A broker correction must not be undone by replaying old position fills."""
     opening = trade()
     book.save_order(order_info(opening))
     book.apply_fill(opening, fill(opening))
-    book.update_position(
-        replace(book.positions.for_source("alpha"), quantity=0, target_quantity=0)
+    book._update_signal_state(
+        replace_signal_state(
+            book.positions._for_signal("alpha"), filled_quantity=0, target_quantity=0
+        )
     )
     recovered = Book(
         order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
@@ -347,32 +358,37 @@ def test_balance_restore_keeps_reconciled_episode_quantity(
     assert recovered.positions.by_contract() == {}
 
 
-def test_balance_repair_is_passive_before_event_loop(book, order_saver, state_saver):
+def test_contract_position_repair_is_passive_before_event_loop(
+    book, order_saver, state_saver
+):
     """LiveRuntime can restore/repair Book before its asyncio loop starts."""
     opening = trade()
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     book.apply_fill(opening, fill(opening))
-    state_saver.store["state"].pop("balance:1")
+    state_saver.store["state"].pop("contract_position:1")
     recovered = Book(
         order_saver=order_saver, state_saver=state_saver, save_async=True, restore=True
     )
-    assert recovered.positions.quantity(opening.contract) == 1
-    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 1
+    assert recovered.positions.filled_quantity(opening.contract) == 1
+    assert (
+        state_saver.read({"state_key": "contract_position:1"})[0]["filled_quantity"]
+        == 1
+    )
 
 
-def test_balance_recovery_repairs_torn_roll_endpoints(
+def test_contract_position_recovery_repairs_torn_roll_endpoints(
     book, order_saver, state_saver, monkeypatch
 ):
-    """A crash between the two roll balance writes cannot move only one leg."""
+    """A crash between the two roll contract_position writes cannot move only one leg."""
     opening = trade(quantity=2)
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     book.apply_fill(opening, fill(opening, quantity=2))
     roll = trade(order_id=2, quantity=2)
     roll.contract = ibi.Bag(symbol="ES")
     book.save_order(
         order_info(
             roll,
-            source_key=None,
+            signal_key=None,
             role="ROLL",
             params={"old_contract": contract(1), "new_contract": contract(2)},
         )
@@ -380,8 +396,8 @@ def test_balance_recovery_repairs_torn_roll_endpoints(
     save = state_saver.save
 
     def interrupt_second_endpoint(document):
-        """Persist the old zero but lose the replacement balance."""
-        if document["state_key"] == "balance:2":
+        """Persist the old zero but lose the replacement contract_position."""
+        if document["state_key"] == "contract_position:2":
             raise RuntimeError("second endpoint not saved")
         save(document)
 
@@ -389,37 +405,43 @@ def test_balance_recovery_repairs_torn_roll_endpoints(
     with pytest.raises(RuntimeError, match="second endpoint"):
         book.apply_fill(roll, fill(roll, exec_id="roll-fill", quantity=2))
     monkeypatch.setattr(state_saver, "save", save)
-    assert state_saver.read({"state_key": "balance:1"})[0]["quantity"] == 0
+    assert (
+        state_saver.read({"state_key": "contract_position:1"})[0]["filled_quantity"]
+        == 0
+    )
     recovered = Book(
         order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
     )
     assert recovered.positions.by_contract() == {contract(2): 2}
 
 
-def test_explicit_fill_cutoff_updates_current_balance(book):
+def test_explicit_fill_cutoff_updates_current_contract_position(book):
     """Installing a recovery cutoff is a mutation, not work deferred to queries."""
     opening = trade()
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     book.apply_fill(opening, fill(opening))
     now = datetime.now(timezone.utc)
-    book.update_target(
-        TargetState(
-            execution_model_name="model",
-            contract=opening.contract,
-            target_quantity=0,
-            target_created_at=now,
+    book.targets._restore(
+        ContractExecutionState(
+            target=ContractTarget(
+                execution_model_name="model",
+                contract=opening.contract,
+                target_quantity=0,
+                target_created_at=now,
+            ),
             fill_evidence_start_at=now,
-        )
+        ).encode()
     )
+    book._repair_contract_positions()
     assert book.positions.by_contract() == {}
 
 
-def test_rebinding_and_commissions_do_not_reapply_balance(
+def test_rebinding_and_commissions_do_not_reapply_contract_position(
     book, state_saver, monkeypatch
 ):
     """A changed broker orderId and later commission retain accounted quantity."""
     opening = trade(order_id=7, perm_id=900)
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     execution = fill(opening)
     book.apply_fill(opening, execution)
     save = Mock(wraps=state_saver.save)
@@ -430,17 +452,17 @@ def test_rebinding_and_commissions_do_not_reapply_balance(
     assert not book.apply_fill(rebound, execution)
     book.update_commission(rebound, execution, execution.commissionReport)
     book.save_order(book.orders.by_id(8))
-    assert book.positions.quantity(opening.contract) == 1
+    assert book.positions.filled_quantity(opening.contract) == 1
     save.assert_not_called()
     book.apply_fill(rebound, fill(rebound, exec_id="new-id"))
-    assert book.positions.quantity(opening.contract) == 2
+    assert book.positions.filled_quantity(opening.contract) == 2
 
 
-@pytest.mark.parametrize("source_key", [None, "alpha"])
-async def test_balance_saves_follow_evidence_on_critical_queue(
-    order_saver, state_saver, monkeypatch, source_key
+@pytest.mark.parametrize("signal_key", [None, "alpha"])
+async def test_contract_position_saves_follow_evidence_on_critical_queue(
+    order_saver, state_saver, monkeypatch, signal_key
 ):
-    """DRAIN persists the shared balance only after the mutation establishing it."""
+    """DRAIN persists the shared contract_position only after the mutation establishing it."""
     writes = []
     save_order, save_state = order_saver.save, state_saver.save
 
@@ -458,31 +480,31 @@ async def test_balance_saves_follow_evidence_on_critical_queue(
     monkeypatch.setattr(state_saver, "save", record_state)
     book = Book(order_saver=order_saver, state_saver=state_saver, save_async=True)
     opening = trade()
-    book.save_order(order_info(opening, source_key=source_key))
+    book.save_order(order_info(opening, signal_key=signal_key))
     book.apply_fill(opening, fill(opening))
-    assert book.positions.quantity(opening.contract) == 1
+    assert book.positions.filled_quantity(opening.contract) == 1
     await book.close()
     kinds = [kind for kind, document in writes]
     assert kinds == (
-        ["order", "order", "balance"]
-        if source_key is None
-        else ["order", "order", "position", "balance"]
+        ["order", "order", "contract_position"]
+        if signal_key is None
+        else ["order", "order", "signal_execution", "contract_position"]
     )
     assert writes[1][1]["fills"][0]["deduplication_key"] == "exec-1"
-    assert writes[-1][1]["quantity"] == 1
+    assert writes[-1][1]["filled_quantity"] == 1
 
 
 def test_roll_leg_evidence_replaces_bag_contribution(book, order_saver, state_saver):
     """Leg details replacing a BAG fallback must not double-count movement."""
     opening = trade(quantity=2)
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     book.apply_fill(opening, fill(opening, quantity=2))
     roll = trade(order_id=2, quantity=1)
     roll.contract = ibi.Bag(symbol="ES")
     book.save_order(
         order_info(
             roll,
-            source_key=None,
+            signal_key=None,
             role="ROLL",
             params={"old_contract": contract(1), "new_contract": contract(2)},
         )
@@ -508,22 +530,22 @@ def test_active_order_filters_all_attribution_fields(book):
     info = book.save_order(order_info(trade()))
 
     assert book.orders.active(
-        source_key="alpha",
+        signal_key="alpha",
         contract=contract(),
         role="OPEN",
         execution_model_name="brackets",
     ) == (info,)
-    assert book.orders.active(source_key="other") == ()
+    assert book.orders.active(signal_key="other") == ()
 
 
 def test_apply_fill_is_idempotent_and_updates_position(book):
     trade_ = trade()
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
-            position_id="episode-1",
+            position_id="position-1",
         )
     )
     info = book.save_order(order_info(trade_))
@@ -531,15 +553,15 @@ def test_apply_fill_is_idempotent_and_updates_position(book):
 
     assert book.apply_fill(trade_, execution)
     assert not book.apply_fill(trade_, execution)
-    assert book.positions.for_source("alpha").quantity == 1
+    assert book.positions._for_signal("alpha").filled_quantity == 1
     assert len(info.fills) == 1
 
 
 def test_late_commission_updates_normalized_fill_evidence(book):
     trade_ = trade()
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
         )
@@ -562,37 +584,37 @@ def test_late_commission_updates_normalized_fill_evidence(book):
 
 
 def test_opposing_logical_positions_reconcile_to_broker_net(book):
-    first = replace(
-        PositionState(
-            source_key="long",
+    first = replace_signal_state(
+        signal_execution_state(
+            signal_key="long",
             execution_model_name="one",
             contract=contract(),
         ),
-        quantity=2,
+        filled_quantity=2,
     )
-    second = replace(
-        PositionState(
-            source_key="short",
+    second = replace_signal_state(
+        signal_execution_state(
+            signal_key="short",
             execution_model_name="two",
             contract=contract(),
         ),
-        quantity=-1,
+        filled_quantity=-1,
     )
-    book.update_position(first)
-    book.update_position(second)
+    book._update_signal_state(first)
+    book._update_signal_state(second)
 
-    assert book.positions.quantity(contract()) == 1
+    assert book.positions.filled_quantity(contract()) == 1
     assert book.positions.by_contract() == {contract(): 1}
 
 
 def test_effective_quantity_includes_unfilled_working_order(book):
     trade_ = trade(quantity=2)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
-            quantity=1,
+            filled_quantity=1,
         )
     )
     book.save_order(order_info(trade_))
@@ -602,142 +624,142 @@ def test_effective_quantity_includes_unfilled_working_order(book):
 
 def test_stop_fill_persists_blocked_direction(book):
     trade_ = trade(side="SELL", quantity=1)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
-            quantity=1,
-            position_id="episode-1",
+            filled_quantity=1,
+            position_id="position-1",
         )
     )
     book.save_order(order_info(trade_, role="STOP_LOSS"))
 
     book.apply_fill(trade_, fill(trade_))
 
-    state = book.positions.for_source("alpha")
-    assert state.quantity == 0
+    state = book.positions._for_signal("alpha")
+    assert state.filled_quantity == 0
     assert state.blocked_direction == 1
 
 
-def test_close_fill_closes_episode_without_changing_block(book):
+def test_close_fill_closes_position_without_changing_block(book):
     trade_ = trade(side="SELL", quantity=1)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
-            quantity=1,
+            filled_quantity=1,
             target_quantity=0,
-            position_id="episode-1",
+            position_id="position-1",
             blocked_direction=1,
-            bracket_inputs={"atr": 10},
+            protection_inputs={"atr": 10},
         )
     )
     book.save_order(order_info(trade_, role="CLOSE"))
 
     book.apply_fill(trade_, fill(trade_))
 
-    state = book.positions.for_source("alpha")
+    state = book.positions._for_signal("alpha")
     assert state.position_id is None
     assert state.blocked_direction == 1
-    assert state.bracket_inputs == {}
+    assert state.protection_inputs == {}
 
 
-def test_protective_fill_closes_episode_and_latest_target(book):
+def test_protective_fill_closes_position_and_latest_target(book):
     trade_ = trade(side="SELL", quantity=1)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
-            position_id="episode-1",
-            bracket_inputs={"atr": 10},
+            position_id="position-1",
+            protection_inputs={"atr": 10},
         )
     )
     book.save_order(order_info(trade_, role="TAKE_PROFIT"))
 
     book.apply_fill(trade_, fill(trade_))
 
-    state = book.positions.for_source("alpha")
-    assert state.quantity == 0
+    state = book.positions._for_signal("alpha")
+    assert state.filled_quantity == 0
     assert state.target_quantity == 0
     assert state.position_id is None
     assert state.blocked_direction == 1
-    assert state.bracket_inputs == {}
+    assert state.protection_inputs == {}
 
 
 @pytest.mark.parametrize("role", ["STOP_LOSS", "TAKE_PROFIT"])
 def test_partial_protective_fill_sets_block_only_when_position_is_flat(book, role):
     trade_ = trade(side="SELL", quantity=2)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
-            quantity=2,
-            position_id="episode-1",
+            filled_quantity=2,
+            position_id="position-1",
         )
     )
     book.save_order(order_info(trade_, role=role))
 
     book.apply_fill(trade_, fill(trade_, exec_id="partial", quantity=1))
 
-    state = book.positions.for_source("alpha")
-    assert state.quantity == 1
+    state = book.positions._for_signal("alpha")
+    assert state.filled_quantity == 1
     assert state.blocked_direction is None
-    assert state.position_id == "episode-1"
+    assert state.position_id == "position-1"
 
     book.apply_fill(trade_, fill(trade_, exec_id="complete", quantity=1))
 
-    state = book.positions.for_source("alpha")
-    assert state.quantity == 0
+    state = book.positions._for_signal("alpha")
+    assert state.filled_quantity == 0
     assert state.blocked_direction == 1
     assert state.position_id is None
 
 
 def test_first_open_fill_clears_prior_block(book):
     trade_ = trade(side="BUY", quantity=2)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
             blocked_direction=1,
-            position_id="episode-2",
+            position_id="position-2",
         )
     )
-    book.save_order(order_info(trade_, role="OPEN", position_id="episode-2"))
+    book.save_order(order_info(trade_, role="OPEN", position_id="position-2"))
 
     book.apply_fill(trade_, fill(trade_, quantity=0.5))
 
-    state = book.positions.for_source("alpha")
-    assert state.quantity == 0.5
+    state = book.positions._for_signal("alpha")
+    assert state.filled_quantity == 0.5
     assert state.blocked_direction is None
 
 
 def test_roll_fill_preserves_block(book):
     trade_ = trade(side="SELL", quantity=1)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=trade_.contract,
-            quantity=1,
+            filled_quantity=1,
             blocked_direction=1,
-            position_id="episode-1",
+            position_id="position-1",
         )
     )
     book.save_order(order_info(trade_, role="ROLL"))
 
     book.apply_fill(trade_, fill(trade_))
 
-    assert book.positions.for_source("alpha").blocked_direction == 1
+    assert book.positions._for_signal("alpha").blocked_direction == 1
 
 
-def test_contract_balance_recovers_from_completed_order_evidence(
+def test_contract_contract_position_recovers_from_completed_order_evidence(
     order_saver, state_saver
 ):
     first = Book(
@@ -748,7 +770,7 @@ def test_contract_balance_recovers_from_completed_order_evidence(
     trade_ = trade(quantity=2)
     info = order_info(
         trade_,
-        source_key=None,
+        signal_key=None,
         position_id=None,
         execution_model_name="serial",
         role="TARGET_ADJUSTMENT",
@@ -766,11 +788,11 @@ def test_contract_balance_recovers_from_completed_order_evidence(
     )
 
     assert recovered.orders.active() == ()
-    assert recovered.positions.quantity(contract()) == 2
+    assert recovered.positions.filled_quantity(contract()) == 2
 
 
 def test_target_state_rejects_stale_target(book):
-    newer = TargetState(
+    newer = ContractTarget(
         execution_model_name="serial",
         contract=contract(),
         target_quantity=2,
@@ -810,23 +832,23 @@ def test_portfolio_state_is_copied_and_read_only(book):
         state["new"] = 1
 
 
-def test_position_episode_ids_change_between_episodes(book):
-    first = book.create_position_episode(
+def test_position_position_ids_change_between_positions(book):
+    first = book.create_signal_position(
         "alpha",
         "brackets",
         contract(),
         target_quantity=1,
         target_created_at=datetime.now(timezone.utc),
-        bracket_inputs={"atr": 10},
+        protection_inputs={"atr": 10},
     )
-    book.close_position_episode("alpha")
-    second = book.create_position_episode(
+    book.close_signal_position("alpha")
+    second = book.create_signal_position(
         "alpha",
         "brackets",
         contract(),
         target_quantity=-1,
         target_created_at=datetime.now(timezone.utc),
-        bracket_inputs={"atr": 10},
+        protection_inputs={"atr": 10},
     )
 
     assert first.position_id != second.position_id
@@ -834,20 +856,20 @@ def test_position_episode_ids_change_between_episodes(book):
 
 def test_position_state_rejects_boolean_blocked_direction():
     with pytest.raises(ValueError, match="blocked_direction"):
-        PositionState(
-            source_key="alpha",
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             blocked_direction=True,
         )
 
 
-def test_blotter_lookup_groups_source_and_position_episode(book):
+def test_blotter_lookup_groups_source_and_position_position(book):
     class Blotter:
         def records(self):
             return (
-                {"source_key": "alpha", "position_id": "one", "realizedPNL": 2},
-                {"source_key": "alpha", "position_id": "two", "realizedPNL": 3},
-                {"source_key": "beta", "position_id": "one", "realizedPNL": 5},
+                {"signal_key": "alpha", "position_id": "one", "realizedPNL": 2},
+                {"signal_key": "alpha", "position_id": "two", "realizedPNL": 3},
+                {"signal_key": "beta", "position_id": "one", "realizedPNL": 5},
             )
 
     book.blotter = Blotter()
@@ -865,14 +887,14 @@ def test_blotter_lookup_merges_queued_and_persisted_rows(book):
                 {
                     "order_id": 1,
                     "perm_id": 101,
-                    "source_key": "alpha",
+                    "signal_key": "alpha",
                     "position_id": "one",
                     "realizedPNL": 1,
                 },
                 {
                     "order_id": 2,
                     "perm_id": 102,
-                    "source_key": "alpha",
+                    "signal_key": "alpha",
                     "position_id": "one",
                     "realizedPNL": 4,
                 },
@@ -891,7 +913,7 @@ def test_blotter_lookup_merges_queued_and_persisted_rows(book):
         {
             "order_id": 1,
             "perm_id": 101,
-            "source_key": "alpha",
+            "signal_key": "alpha",
             "position_id": "one",
             "realizedPNL": 2,
         }
@@ -907,21 +929,21 @@ def test_blotter_lookup_merges_queued_and_persisted_rows(book):
 def test_clear_state_persists_flat_tombstones_before_restart(
     book, order_saver, state_saver
 ):
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
             target_created_at=datetime.now(timezone.utc),
-            position_id="episode",
+            position_id="position",
             blocked_direction=1,
-            bracket_inputs={"atr": 10},
+            protection_inputs={"atr": 10},
         )
     )
     book.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name="serial",
             contract=contract(2),
             target_quantity=3,
@@ -932,7 +954,7 @@ def test_clear_state_persists_flat_tombstones_before_restart(
 
     book.clear_state()
 
-    assert book.positions.for_source("alpha") is None
+    assert book.positions._for_signal("alpha") is None
     assert book.targets.for_contract(contract()) is None
     assert book.portfolios.load("allocation") is None
 
@@ -943,24 +965,24 @@ def test_clear_state_persists_flat_tombstones_before_restart(
         restore=True,
     )
 
-    position = recovered.positions.for_source("alpha")
-    assert position.quantity == 0
+    position = recovered.positions._for_signal("alpha")
+    assert position.filled_quantity == 0
     assert position.target_quantity == 0
     assert position.position_id is None
     assert position.blocked_direction is None
-    assert position.bracket_inputs == {}
+    assert position.protection_inputs == {}
     assert recovered.targets.for_contract(contract()) is None
     assert recovered.portfolios.load("allocation") == {}
 
 
 @pytest.mark.parametrize("with_target", [False, True])
-def test_clear_state_durably_resets_direct_fill_projection(
+def test_clear_state_durably_resets_contract_fill_projection(
     book, order_saver, state_saver, with_target
 ):
     trade_ = trade(quantity=2)
     if with_target:
         book.update_target(
-            TargetState(
+            ContractTarget(
                 execution_model_name="serial",
                 contract=trade_.contract,
                 target_quantity=2,
@@ -972,17 +994,17 @@ def test_clear_state_durably_resets_direct_fill_projection(
             trade_,
             role="TARGET_ADJUSTMENT",
             execution_model_name="serial",
-            source_key=None,
+            signal_key=None,
             position_id=None,
         )
     )
     execution = fill(trade_, quantity=2)
     book.apply_fill(trade_, execution)
-    assert book.positions.quantity(contract()) == 2
+    assert book.positions.filled_quantity(contract()) == 2
 
     book.clear_state()
 
-    assert book.positions.quantity(contract()) == 0
+    assert book.positions.filled_quantity(contract()) == 0
     recovered = Book(
         order_saver=order_saver,
         state_saver=state_saver,
@@ -990,23 +1012,23 @@ def test_clear_state_durably_resets_direct_fill_projection(
         restore=True,
     )
     assert recovered.targets.for_contract(contract()) is None
-    assert recovered.positions.quantity(contract()) == 0
+    assert recovered.positions.filled_quantity(contract()) == 0
 
     recovered.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name="serial",
             contract=trade_.contract,
             target_quantity=1,
             target_created_at=datetime.now(timezone.utc),
         )
     )
-    assert recovered.positions.quantity(contract()) == 0
+    assert recovered.positions.filled_quantity(contract()) == 0
 
 
-def test_direct_fill_after_clear_cutoff_is_accounted(book):
+def test_contract_fill_after_clear_cutoff_is_accounted(book):
     trade_ = trade(quantity=2)
     book.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name="serial",
             contract=trade_.contract,
             target_quantity=2,
@@ -1018,7 +1040,7 @@ def test_direct_fill_after_clear_cutoff_is_accounted(book):
             trade_,
             role="TARGET_ADJUSTMENT",
             execution_model_name="serial",
-            source_key=None,
+            signal_key=None,
             position_id=None,
         )
     )
@@ -1027,7 +1049,7 @@ def test_direct_fill_after_clear_cutoff_is_accounted(book):
     late_fill = fill(trade_, exec_id="late-after-clear", quantity=1)
     book.apply_fill(trade_, late_fill)
 
-    assert book.positions.quantity(contract()) == 1
+    assert book.positions.filled_quantity(contract()) == 1
 
 
 def test_roll_state_round_trips_through_book_persistence(
@@ -1036,14 +1058,14 @@ def test_roll_state_round_trips_through_book_persistence(
     created_at = datetime.now(timezone.utc)
     state = RollState(
         series_key="es-series",
-        mode=FutureRollMode.DIRECT,
-        executor_name="direct-roll",
+        mode=ExecutionMode.CONTRACT,
+        executor_name="contract-roll",
         old_contract=contract(1),
         new_contract=contract(2),
         participants=(
             RollParticipant(
                 execution_model_name="serial",
-                quantity=2,
+                filled_quantity=2,
             ),
         ),
         stage=FutureRollStage.ROLL_ORDER_ACTIVE,

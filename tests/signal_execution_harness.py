@@ -1,4 +1,4 @@
-"""Independent broker boundary for full one-to-one component pipelines.
+"""Independent broker boundary for full signal execution component pipelines.
 
 The broker owns its own fill ledger. Tests drive IB events, never Book's
 projection methods, and use the real Trader and Controller.
@@ -22,7 +22,7 @@ async def settle_events() -> None:
         await asyncio.sleep(0)
 
 
-class EpisodeBroker(ibi.IB):
+class PositionBroker(ibi.IB):
     """Simulate submission, fills and OCA at the IB boundary, without sockets."""
 
     def __init__(self) -> None:
@@ -89,9 +89,9 @@ class EpisodeBroker(ibi.IB):
             if quantity
         ]
 
-    def restarted(self) -> EpisodeBroker:
+    def restarted(self) -> PositionBroker:
         """Rebuild broker data without retaining any old Trade event callbacks."""
-        broker = EpisodeBroker()
+        broker = PositionBroker()
         broker.quantities = deepcopy(self.quantities)
         broker._execution_number = self._execution_number
         broker.contracts = deepcopy(self.contracts)
@@ -133,7 +133,7 @@ class EpisodeBroker(ibi.IB):
                 self.quantities.get(trade.contract, 0) + side * quantity
             )
         execution = ibi.Execution(
-            execId=f"episode-{self._execution_number}",
+            execId=f"position-{self._execution_number}",
             orderId=trade.order.orderId,
             permId=trade.order.permId,
             time=now,
@@ -183,7 +183,7 @@ class EpisodeBroker(ibi.IB):
         await settle_events()
 
 
-class EpisodeSignalModel(PandasSignalModel):
+class PositionSignalModel(PandasSignalModel):
     """Emit the supplied calculation dataframe through the standard template."""
 
     def df(self, data: pd.DataFrame) -> pd.DataFrame:

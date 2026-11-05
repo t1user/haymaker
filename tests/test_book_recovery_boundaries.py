@@ -1,12 +1,13 @@
-"""Crash boundaries across order evidence, source state and aggregate balances."""
+"""Crash boundaries across order evidence, signal state and aggregate contract positions."""
 
-from dataclasses import replace
+from runtime_helpers import replace_signal_state, signal_execution_state
+
 from unittest.mock import Mock
 
 import pytest
 
 from haymaker.async_wrappers import QueueProcessingError
-from haymaker.book import Book, PositionState
+from haymaker.book import Book
 from test_book import fill, order_info, trade
 
 
@@ -17,13 +18,13 @@ def restore(order_saver, state_saver):
     )
 
 
-def test_interrupted_source_projection_recovers_once(
+def test_interrupted_signal_projection_recovers_once(
     book, order_saver, state_saver, monkeypatch
 ):
     """Receipt of evidence must not imply that its position update committed."""
     opening = trade()
-    book.update_position(
-        PositionState(source_key="alpha", execution_model_name="brackets")
+    book._update_signal_state(
+        signal_execution_state(signal_key="alpha", execution_model_name="brackets")
     )
     book.save_order(order_info(opening))
     execution = fill(opening)
@@ -31,7 +32,7 @@ def test_interrupted_source_projection_recovers_once(
 
     def fail_position(document):
         """Lose the position write after committing the execution evidence."""
-        if document.get("state_type") == "position":
+        if document.get("state_type") == "signal_execution":
             raise RuntimeError("interrupted position write")
         save(document)
 
@@ -41,8 +42,8 @@ def test_interrupted_source_projection_recovers_once(
     monkeypatch.setattr(state_saver, "save", save)
     for _ in range(2):
         recovered = restore(order_saver, state_saver)
-        assert recovered.positions.for_source("alpha").quantity == 1
-        assert recovered.positions.quantity(opening.contract) == 1
+        assert recovered.positions._for_signal("alpha").filled_quantity == 1
+        assert recovered.positions.filled_quantity(opening.contract) == 1
         assert not recovered.apply_fill(opening, execution)
 
 
@@ -57,23 +58,25 @@ def test_checkpoint_preserves_explicit_correction_and_reset(
     if reset:
         book.clear_state()
     else:
-        book.update_position(replace(book.positions.for_source("alpha"), quantity=0))
+        book._update_signal_state(
+            replace_signal_state(book.positions._for_signal("alpha"), filled_quantity=0)
+        )
     recovered = restore(order_saver, state_saver)
-    assert recovered.positions.quantity(opening.contract) == 0
+    assert recovered.positions.filled_quantity(opening.contract) == 0
     assert not recovered.apply_fill(opening, fill(opening))
 
 
 def test_rebound_order_is_counted_once_after_restart(book, order_saver, state_saver):
     """Old persisted broker IDs must not become extra execution evidence."""
     opening = trade(order_id=7, perm_id=900)
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     execution = fill(opening)
     book.apply_fill(opening, execution)
     for order_id in (8, 3):
         rebound = trade(order_id=order_id, perm_id=900)
         book.rebind_trade(rebound)
         book = restore(order_saver, state_saver)
-        assert book.positions.quantity(opening.contract) == 1
+        assert book.positions.filled_quantity(opening.contract) == 1
         assert len(book.orders.query()) == 1
         assert book.orders.by_perm_id(900).orderId == order_id
         assert not book.apply_fill(rebound, execution)
@@ -89,19 +92,19 @@ def test_live_replay_and_new_fill_after_reset_keep_checkpoint(
     book.apply_fill(opening, old)
     book.clear_state()
     assert not book.apply_fill(opening, old)
-    assert book.positions.for_source("alpha") is None
+    assert book.positions._for_signal("alpha") is None
     new = fill(opening, exec_id="post-reset")
     assert book.apply_fill(opening, new)
     assert not book.apply_fill(opening, old)
     recovered = restore(order_saver, state_saver)
-    assert recovered.positions.for_source("alpha").quantity == 1
-    assert recovered.positions.quantity(opening.contract) == 1
+    assert recovered.positions._for_signal("alpha").filled_quantity == 1
+    assert recovered.positions.filled_quantity(opening.contract) == 1
 
 
 async def test_failed_evidence_write_stops_dependent_projections(
     order_saver, state_saver, monkeypatch
 ):
-    """A critical queue must not skip evidence and commit a dependent balance."""
+    """A critical queue must not skip evidence and commit a dependent contract_position."""
     save = order_saver.save
 
     def fail_evidence(document):

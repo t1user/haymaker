@@ -24,19 +24,19 @@ def test_atom_has_explicit_events():
     assert atom.feedbackEvent.name() == "feedbackEvent"
 
 
-def test_atom_exposes_unmodified_blueprint_copy(atom_runtime):
-    """Blueprint access is independent of mutable inputs and selected roles."""
+def test_atom_exposes_unmodified_contract_spec_copy(atom_runtime):
+    """ContractSpec access is independent of mutable inputs and selected roles."""
     atom = Atom()
     with pytest.raises(KeyError, match="Contract not set"):
-        _ = atom.contract_blueprint
+        _ = atom.contract_spec
     supplied = ibi.Future("ES", exchange="CME")
     atom.contract = supplied
     supplied.conId = 7
-    public = atom.contract_blueprint
+    public = atom.contract_spec
     public.currency = "USD"
-    assert atom.contract_blueprint == ibi.Future("ES", exchange="CME")
+    assert atom.contract_spec == ibi.Future("ES", exchange="CME")
     atom.which_contract = ActiveNext.NEXT
-    assert atom.contract_blueprint == ibi.Future("ES", exchange="CME")
+    assert atom.contract_spec == ibi.Future("ES", exchange="CME")
 
 
 def test_base_on_data_requires_explicit_implementation():
@@ -263,13 +263,13 @@ def test_pipe_connects_downstream_from_last_member():
     assert output == [((("input", "first"), "second"), "sink")]
 
 
-def test_contract_descriptor_registers_blueprint(atom_runtime):
+def test_contract_descriptor_registers_contract_spec(atom_runtime):
     atom = Atom()
     future = ibi.Future("ES", exchange="CME")
 
     atom.contract = future
 
-    assert future in atom_runtime.contract_registry.blueprints
+    assert future in atom_runtime.contract_registry.contract_specs
     assert atom.contract == future
 
 
@@ -287,9 +287,9 @@ def test_contract_descriptor_accepts_operational_roles(
     atom_runtime, monkeypatch, which_contract
 ):
     atom = Atom()
-    blueprint = ibi.Future("ES", exchange="CME")
+    contract_spec = ibi.Future("ES", exchange="CME")
     resolved = ibi.Future(conId=1, symbol="ES", exchange="CME")
-    atom.contract = blueprint
+    atom.contract = contract_spec
     atom.which_contract = which_contract
     monkeypatch.setattr(
         atom_runtime.contract_registry,
@@ -342,7 +342,7 @@ def test_contract_selector_returns_initialized_selector(atom_runtime, monkeypatc
     monkeypatch.setattr(
         atom_runtime.contract_registry,
         "get_selector",
-        lambda blueprint: selector,
+        lambda contract_spec: selector,
     )
 
     assert atom.contract_selector is selector
@@ -368,7 +368,7 @@ def test_contract_change_emits_and_records_roll(atom_runtime):
     new = ibi.Future(conId=2, symbol="ES", exchange="CME")
     atom._contract_memo = old
     atom_runtime.contract_registry.get_contract = lambda *args: new
-    atom._contract_blueprint = old
+    atom._contract_spec = old
 
     atom._process_contract_change()
 

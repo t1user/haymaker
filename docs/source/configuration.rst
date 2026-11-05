@@ -156,7 +156,7 @@ closely related runtime objects.
    health checks, execution verification, error filtering, unknown-trade policy,
    bracket policy, and futures-roll time.
    ``position_mismatch_policy`` defaults to ``fail``; ``correct`` explicitly
-   permits inferred one-to-one Book/target corrections. See
+   permits inferred signal execution Book/target corrections. See
    :ref:`position-mismatch-policy` for trading safety and offline repair.
 
 ``book``

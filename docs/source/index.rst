@@ -15,6 +15,8 @@ Haymaker Documentation
    logging
    supervisor
    ib_message_codes
+   terminology
+   naming-migration
    execution
    example
    dataloader

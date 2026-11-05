@@ -62,7 +62,7 @@ class MissingBacktestDataError(BacktestDataError, LookupError):
 
 
 class AmbiguousBacktestDataError(BacktestDataError, LookupError):
-    """Raised when a contract blueprint matches multiple loaded series."""
+    """Raised when a contract specification matches multiple loaded series."""
 
 
 class MissingContractMetadataError(BacktestDataError, KeyError):
@@ -176,9 +176,9 @@ class BacktestDataRepository:
             each :class:`StoredSeries` as warmup history.
         end: Optional final replay clock point.
 
-    Blueprints are optional.  When registered, only matching datastore series
+    Contract specifications are optional.  When registered, only matching datastore series
     are loaded.  An explicit contract primarily matches by ``conId``.  A
-    ``ContFuture`` blueprint selects the explicit ``FUT`` chain for the same
+    ``ContFuture`` contract_spec selects the explicit ``FUT`` chain for the same
     root, exchange, currency, and trading class rather than a persisted
     ``CONTFUT`` series.
     """
@@ -194,27 +194,29 @@ class BacktestDataRepository:
         self._start = _normalize_bound(start, "start")
         self._end = _normalize_bound(end, "end")
         _validate_bound_pair(self._start, self._end)
-        self._blueprints: list[ibi.Contract] = []
+        self._contract_specs: list[ibi.Contract] = []
         self._series: tuple[StoredSeries, ...] | None = None
         self._timestamps: tuple[ReplayTimestamp, ...] | None = None
 
-    def register(self, *blueprints: ibi.Contract) -> None:
-        """Register contract blueprints used to filter datastore collections.
+    def register(self, *contract_specs: ibi.Contract) -> None:
+        """Register contract specifications used to filter datastore collections.
 
         Args:
-            *blueprints: Concrete contracts or partial contract specifications.
+            *contract_specs: Concrete contracts or partial contract specifications.
 
         Raises:
-            TypeError: If any blueprint is not an ``ib_insync.Contract``.
+            TypeError: If any contract_spec is not an ``ib_insync.Contract``.
             BacktestDataError: If registration is attempted after loading.
         """
 
         if self._series is not None:
-            raise BacktestDataError("Contract blueprints cannot change after load()")
-        for blueprint in blueprints:
-            if not isinstance(blueprint, ibi.Contract):
-                raise TypeError("Backtest contract blueprints must be Contracts")
-            self._blueprints.append(blueprint)
+            raise BacktestDataError(
+                "Contract specifications cannot change after load()"
+            )
+        for contract_spec in contract_specs:
+            if not isinstance(contract_spec, ibi.Contract):
+                raise TypeError("Backtest contract specifications must be Contracts")
+            self._contract_specs.append(contract_spec)
 
     async def load(self) -> "BacktestDataRepository":
         """Load, validate, and index every matching datastore collection.
@@ -225,12 +227,12 @@ class BacktestDataRepository:
         Raises:
             InvalidBacktestDataError: If matching persisted data has an invalid
                 contract, index, or OHLC dataframe.
-            MissingBacktestDataError: If a registered blueprint has no matching
+            MissingBacktestDataError: If a registered contract_spec has no matching
                 series.
         """
 
         loaded: list[StoredSeries] = []
-        matched_blueprints: set[int] = set()
+        matched_contract_specs: set[int] = set()
         keys = await self._store.keys()
         if any(not isinstance(key, str) for key in keys):
             raise InvalidBacktestDataError("Backtest datastore keys must be strings")
@@ -244,14 +246,14 @@ class BacktestDataRepository:
                     f"Backtest collection {key!r} has non-mapping metadata"
                 )
             metadata = dict(raw_metadata or {})
-            if self._blueprints and not any(
-                _metadata_may_match_blueprint(blueprint, metadata)
-                for blueprint in self._blueprints
+            if self._contract_specs and not any(
+                _metadata_may_match_contract_spec(contract_spec, metadata)
+                for contract_spec in self._contract_specs
             ):
                 continue
             contract = _contract_from_metadata(key, metadata)
-            matches = self._matching_blueprint_indexes(contract)
-            if self._blueprints and not matches:
+            matches = self._matching_contract_spec_indexes(contract)
+            if self._contract_specs and not matches:
                 continue
             frame = await self._store.read(key)
             if frame is None:
@@ -266,16 +268,16 @@ class BacktestDataRepository:
                     frame=_validate_frame(key, frame),
                 )
             )
-            matched_blueprints.update(matches)
+            matched_contract_specs.update(matches)
 
         missing = [
-            blueprint
-            for index, blueprint in enumerate(self._blueprints)
-            if index not in matched_blueprints
+            contract_spec
+            for index, contract_spec in enumerate(self._contract_specs)
+            if index not in matched_contract_specs
         ]
         if missing:
             raise MissingBacktestDataError(
-                "No persisted series matches contract blueprint(s): "
+                "No persisted series matches contract specification(s): "
                 + ", ".join(map(str, missing))
             )
 
@@ -345,13 +347,13 @@ class BacktestDataRepository:
 
         return self.series_for(contract).contract_details
 
-    def details_for_blueprint(
-        self, blueprint: ibi.Contract
+    def details_for_contract_spec(
+        self, contract_spec: ibi.Contract
     ) -> list[ibi.ContractDetails]:
-        """Return all stored contract details matching a blueprint.
+        """Return all stored contract details matching a contract_spec.
 
         Args:
-            blueprint: A concrete or partial contract specification.  A
+            contract_spec: A concrete or partial contract specification.  A
                 ``ContFuture`` selects its explicit ``FUT`` chain.
 
         Returns:
@@ -359,17 +361,17 @@ class BacktestDataRepository:
             contract expiry, then collection key.
 
         Raises:
-            MissingBacktestDataError: If the blueprint matches no loaded series.
+            MissingBacktestDataError: If the contract_spec matches no loaded series.
         """
 
         matches = [
             series
             for series in self.series
-            if _blueprint_matches(blueprint, series.contract)
+            if _contract_spec_matches(contract_spec, series.contract)
         ]
         if not matches:
             raise MissingBacktestDataError(
-                f"No loaded series matches contract blueprint {blueprint}"
+                f"No loaded series matches contract specification {contract_spec}"
             )
         matches.sort(key=_series_expiry_key)
         return [series.contract_details for series in matches]
@@ -423,13 +425,13 @@ class BacktestDataRepository:
                 matches.append(series)
         return tuple(matches)
 
-    def _matching_blueprint_indexes(self, contract: ibi.Contract) -> set[int]:
-        """Return indexes of registered blueprints matching ``contract``."""
+    def _matching_contract_spec_indexes(self, contract: ibi.Contract) -> set[int]:
+        """Return indexes of registered contract_specs matching ``contract``."""
 
         return {
             index
-            for index, blueprint in enumerate(self._blueprints)
-            if _blueprint_matches(blueprint, contract)
+            for index, contract_spec in enumerate(self._contract_specs)
+            if _contract_spec_matches(contract_spec, contract)
         }
 
     def _build_timestamps(
@@ -456,7 +458,7 @@ class BacktestDataRepository:
 
 async def load_backtest_data(
     store: BacktestDataStore,
-    blueprints: Iterable[ibi.Contract] = (),
+    contract_specs: Iterable[ibi.Contract] = (),
     *,
     start: ReplayTimestamp | None = None,
     end: ReplayTimestamp | None = None,
@@ -465,7 +467,7 @@ async def load_backtest_data(
 
     Args:
         store: Read-only async datastore for one dataloader library.
-        blueprints: Optional contracts used to select stored series.
+        contract_specs: Optional contracts used to select stored series.
         start: Optional first replay timestamp.
         end: Optional final replay timestamp.
 
@@ -474,7 +476,7 @@ async def load_backtest_data(
     """
 
     repository = BacktestDataRepository(store, start=start, end=end)
-    repository.register(*blueprints)
+    repository.register(*contract_specs)
     return await repository.load()
 
 
@@ -552,7 +554,7 @@ def _contract_details_values(metadata: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _series_expiry_key(series: StoredSeries) -> tuple[str, str]:
-    """Return the deterministic expiry/key ordering for blueprint details."""
+    """Return the deterministic expiry/key ordering for contract_spec details."""
 
     return series.contract.lastTradeDateOrContractMonth, series.key
 
@@ -707,24 +709,26 @@ def _normalize_requested_timestamp(
     return normalized
 
 
-def _blueprint_matches(blueprint: ibi.Contract, candidate: ibi.Contract) -> bool:
-    """Return whether a persisted contract belongs to a registered blueprint."""
+def _contract_spec_matches(
+    contract_spec: ibi.Contract, candidate: ibi.Contract
+) -> bool:
+    """Return whether a persisted contract belongs to a registered contract_spec."""
 
-    if blueprint.secType == "CONTFUT":
+    if contract_spec.secType == "CONTFUT":
         if candidate.secType != "FUT":
             return False
-        return _matching_fields(blueprint, candidate, _CONT_FUTURE_IDENTITY_FIELDS)
-    if blueprint.conId:
-        return bool(candidate.conId and blueprint.conId == candidate.conId)
-    if blueprint.secType and blueprint.secType != candidate.secType:
+        return _matching_fields(contract_spec, candidate, _CONT_FUTURE_IDENTITY_FIELDS)
+    if contract_spec.conId:
+        return bool(candidate.conId and contract_spec.conId == candidate.conId)
+    if contract_spec.secType and contract_spec.secType != candidate.secType:
         return False
-    return _matching_nondefault_fields(blueprint, candidate)
+    return _matching_nondefault_fields(contract_spec, candidate)
 
 
-def _metadata_may_match_blueprint(
-    blueprint: ibi.Contract, metadata: Mapping[str, Any]
+def _metadata_may_match_contract_spec(
+    contract_spec: ibi.Contract, metadata: Mapping[str, Any]
 ) -> bool:
-    """Return whether raw metadata could belong to ``blueprint``.
+    """Return whether raw metadata could belong to ``contract_spec``.
 
     This is a conservative prefilter used before strict Contract reconstruction.
     A key is excluded only when a present, type-compatible identity value proves
@@ -732,25 +736,25 @@ def _metadata_may_match_blueprint(
     metadata errors are not hidden.
     """
 
-    if blueprint.secType == "CONTFUT":
+    if contract_spec.secType == "CONTFUT":
         if _metadata_field_conflicts(metadata, "secType", "FUT"):
             return False
         return not any(
-            _metadata_field_conflicts(metadata, name, getattr(blueprint, name))
+            _metadata_field_conflicts(metadata, name, getattr(contract_spec, name))
             for name in _CONT_FUTURE_IDENTITY_FIELDS
-            if getattr(blueprint, name) != getattr(_DEFAULT_CONTRACT, name)
+            if getattr(contract_spec, name) != getattr(_DEFAULT_CONTRACT, name)
         )
-    if blueprint.conId:
-        return not _metadata_field_conflicts(metadata, "conId", blueprint.conId)
-    if blueprint.secType and _metadata_field_conflicts(
-        metadata, "secType", blueprint.secType
+    if contract_spec.conId:
+        return not _metadata_field_conflicts(metadata, "conId", contract_spec.conId)
+    if contract_spec.secType and _metadata_field_conflicts(
+        metadata, "secType", contract_spec.secType
     ):
         return False
     return not any(
-        _metadata_field_conflicts(metadata, name, getattr(blueprint, name))
+        _metadata_field_conflicts(metadata, name, getattr(contract_spec, name))
         for name in _CONTRACT_FIELD_NAMES
         if name not in _NON_IDENTITY_CONTRACT_FIELDS
-        and getattr(blueprint, name) != getattr(_DEFAULT_CONTRACT, name)
+        and getattr(contract_spec, name) != getattr(_DEFAULT_CONTRACT, name)
     )
 
 
@@ -781,26 +785,26 @@ def _lookup_matches(requested: ibi.Contract, candidate: ibi.Contract) -> bool:
     if requested.conId:
         return bool(candidate.conId and requested.conId == candidate.conId)
     if requested.secType == "CONTFUT":
-        return _blueprint_matches(requested, candidate)
-    return _blueprint_matches(requested, candidate)
+        return _contract_spec_matches(requested, candidate)
+    return _contract_spec_matches(requested, candidate)
 
 
 def _matching_fields(
-    blueprint: ibi.Contract, candidate: ibi.Contract, names: Iterable[str]
+    contract_spec: ibi.Contract, candidate: ibi.Contract, names: Iterable[str]
 ) -> bool:
-    """Compare every non-default blueprint field named by ``names``."""
+    """Compare every non-default contract_spec field named by ``names``."""
 
     for name in names:
-        expected = getattr(blueprint, name, None)
+        expected = getattr(contract_spec, name, None)
         if expected not in (None, "", 0) and expected != getattr(candidate, name, None):
             return False
     return True
 
 
 def _matching_nondefault_fields(
-    blueprint: ibi.Contract, candidate: ibi.Contract
+    contract_spec: ibi.Contract, candidate: ibi.Contract
 ) -> bool:
-    """Compare every specified Contract identity field on a blueprint.
+    """Compare every specified Contract identity field on a contract_spec.
 
     This includes derivative identity such as expiry, strike, right, and
     multiplier. Broker request controls such as ``includeExpired`` are not
@@ -810,7 +814,7 @@ def _matching_nondefault_fields(
     for name in _CONTRACT_FIELD_NAMES:
         if name in _NON_IDENTITY_CONTRACT_FIELDS:
             continue
-        expected = getattr(blueprint, name)
+        expected = getattr(contract_spec, name)
         if expected == getattr(_DEFAULT_CONTRACT, name):
             continue
         if expected != getattr(candidate, name):

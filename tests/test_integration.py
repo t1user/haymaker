@@ -75,7 +75,7 @@ def contract(symbol="ES", con_id=1):
     )
 
 
-def test_one_to_one_pipeline_submits_attributed_open(atom_runtime):
+def test_signal_execution_pipeline_submits_attributed_open(atom_runtime):
     trader = FakeTrader()
     controller = Controller(trader=trader)
     atom_runtime.bind_controller(controller)
@@ -97,22 +97,22 @@ def test_one_to_one_pipeline_submits_attributed_open(atom_runtime):
     assert trade.order.action == "BUY"
     assert trade.order.totalQuantity == 2
     info = atom_runtime.book.orders.by_id(trade.order.orderId)
-    assert info.source_key == "alpha"
+    assert info.signal_key == "alpha"
     assert info.execution_model_name == "alpha_brackets"
     assert (
-        info.position_id == atom_runtime.book.positions.for_source("alpha").position_id
+        info.position_id == atom_runtime.book.positions._for_signal("alpha").position_id
     )
 
 
 class AggregatePortfolio(Portfolio):
     def __init__(self):
-        super().__init__(sources={"alpha", "beta"})
+        super().__init__(signal_keys={"alpha", "beta"})
         self.values: dict[str, float] = {}
 
     def process(self, signal: Signal) -> Iterable[PositionTarget]:
         if not isinstance(signal.value, float):
             raise TypeError("AggregatePortfolio requires scalar Signals")
-        self.values[signal.source_key] = signal.value
+        self.values[signal.signal_key] = signal.value
         total = sum(self.values.values())
         return (
             PositionTarget(
@@ -123,7 +123,7 @@ class AggregatePortfolio(Portfolio):
         )
 
 
-def test_direct_pipeline_routes_aggregate_target(atom_runtime):
+def test_contract_execution_pipeline_routes_aggregate_target(atom_runtime):
     trader = FakeTrader()
     controller = Controller(trader=trader)
     atom_runtime.bind_controller(controller)
@@ -136,7 +136,7 @@ def test_direct_pipeline_routes_aggregate_target(atom_runtime):
 
     portfolio.onData(
         Signal(
-            source_key="alpha",
+            signal_key="alpha",
             contract=contract(),
             value=2,
             signal_type=SignalType.STATE,
@@ -144,7 +144,7 @@ def test_direct_pipeline_routes_aggregate_target(atom_runtime):
     )
     portfolio.onData(
         Signal(
-            source_key="beta",
+            signal_key="beta",
             contract=contract(),
             value=-1,
             signal_type=SignalType.STATE,

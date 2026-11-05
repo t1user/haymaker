@@ -106,7 +106,7 @@ class BarAggregator(Atom):
         # these 2 properties together ensure that self.contract
         # will be the same as on streamer
         self.which_contract = streamer.which_contract
-        self.contract = streamer.contract_blueprint
+        self.contract = streamer.contract_spec
 
     def onDataBar(self, bars, *args) -> None:
         """

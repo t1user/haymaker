@@ -1,17 +1,18 @@
+from runtime_helpers import replace_signal_state
+
 """Independent real-Controller roll scenarios, driven only at the IB boundary."""
 
 from datetime import datetime, timedelta, timezone
-from dataclasses import replace
 
 import ib_insync as ibi
 import pytest
-from episode_harness import EpisodeBroker, settle_events
+from signal_execution_harness import PositionBroker, settle_events
 
 from haymaker.book import FutureRollStage
 from haymaker.components import (
     BracketExecutionModel,
     FixedStop,
-    PositionIntent,
+    TargetIntent,
     PositionTarget,
     SerialTargetExecutionModel,
     StandardOrderRole,
@@ -64,18 +65,16 @@ async def test_daily_roll_defers_unavailable_state_without_persisting_block(
 
 
 @pytest.mark.parametrize("close_first", [False, True])
-async def test_bracket_roll_refreshes_after_pending_entry_or_close(
-    rolling, close_first
-):
+async def test_signal_roll_refreshes_after_pending_entry_or_close(rolling, close_first):
     """Pending entry grows the roll; pending close removes it without a BAG."""
     runtime, broker, controller, (old, active, _) = rolling
     model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
     model.onData(
         PositionTarget(
-            source_key="alpha",
+            signal_key="alpha",
             contract=old,
             target_quantity=2,
-            intent=PositionIntent.OPEN,
+            intent=TargetIntent.OPEN,
             metadata={"atr": 5},
         )
     )
@@ -85,10 +84,10 @@ async def test_bracket_roll_refreshes_after_pending_entry_or_close(
         await broker.fill(entry, 1)
         model.onData(
             PositionTarget(
-                source_key="alpha",
+                signal_key="alpha",
                 contract=old,
                 target_quantity=0,
-                intent=PositionIntent.CLOSE,
+                intent=TargetIntent.CLOSE,
             )
         )
     pending = broker.submitted[-1]
@@ -103,29 +102,29 @@ async def test_bracket_roll_refreshes_after_pending_entry_or_close(
     if close_first:
         assert not any(isinstance(t.contract, ibi.Bag) for t in broker.submitted)
         assert runtime.book.rolls.for_series(key).stage is FutureRollStage.COMPLETE
-        assert runtime.book.positions.for_source("alpha").quantity == 0
+        assert runtime.book.positions._for_signal("alpha").filled_quantity == 0
     else:
         combo = broker.submitted[-1]
         assert isinstance(combo.contract, ibi.Bag)
         assert combo.order.totalQuantity == 2
         await broker.fill(combo)
         assert (
-            runtime.book.positions.for_source("alpha").quantity
+            runtime.book.positions._for_signal("alpha").filled_quantity
             == broker.quantities[active]
             == 2
         )
 
 
-async def test_bracket_roll_rejects_replaced_episode_before_submission(rolling):
-    """Recovery cannot use an old episode's plan for a new episode."""
+async def test_signal_roll_rejects_replaced_position_before_submission(rolling):
+    """Recovery cannot use an old position's plan for a new position."""
     runtime, broker, controller, (old, _, _) = rolling
     model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
     model.onData(
         PositionTarget(
-            source_key="alpha",
+            signal_key="alpha",
             contract=old,
             target_quantity=2,
-            intent=PositionIntent.OPEN,
+            intent=TargetIntent.OPEN,
             metadata={"atr": 5},
         )
     )
@@ -133,9 +132,11 @@ async def test_bracket_roll_rejects_replaced_episode_before_submission(rolling):
     await broker.fill(entry, 1)
     controller.future_roller.roll()
     key = runtime.contract_registry.series_key(old)
-    # Simulate incompatible restored episode state, not a normal fill transition.
-    runtime.book.update_position(
-        replace(runtime.book.positions.for_source("alpha"), position_id="different")
+    # Simulate incompatible restored position state, not a normal fill transition.
+    runtime.book._update_signal_state(
+        replace_signal_state(
+            runtime.book.positions._for_signal("alpha"), position_id="different"
+        )
     )
     await broker.fill(entry, 1)
     assert runtime.book.rolls.for_series(key).stage is FutureRollStage.BLOCKED
@@ -161,7 +162,7 @@ def rolling(atom_runtime_factory, monkeypatch):
         for index, days in enumerate((-30, 60, 150), 1)
     ]
     registry = ContractRegistry()
-    registry.register_blueprint(ibi.Future("ES", exchange="CME"))
+    registry.register_contract_spec(ibi.Future("ES", exchange="CME"))
     registry.reset_data(
         [
             [
@@ -171,7 +172,7 @@ def rolling(atom_runtime_factory, monkeypatch):
         ]
     )
     monkeypatch.setattr(Details, "is_open", lambda self: True)
-    broker = EpisodeBroker()
+    broker = PositionBroker()
     broker.register_contracts(*chain)
     runtime = atom_runtime_factory(ib=broker, contract_registry=registry)
     controller = Controller(trader=runtime.trader)
@@ -182,7 +183,7 @@ def rolling(atom_runtime_factory, monkeypatch):
 
 
 @pytest.mark.parametrize("newer_target", [False, True])
-async def test_direct_roll_transfers_once_and_respects_new_explicit_target(
+async def test_contract_roll_transfers_once_and_respects_new_explicit_target(
     rolling, newer_target
 ):
     """Physical combo legs and concrete targets agree after resumed completion."""
@@ -200,7 +201,7 @@ async def test_direct_roll_transfers_once_and_respects_new_explicit_target(
         model.onData(PositionTarget(contract=active, target_quantity=5))
         assert broker.submitted[-1] is combo
     await broker.fill(combo, 1)
-    assert runtime.book.positions.quantity(old) == broker.quantities[old] == 1
+    assert runtime.book.positions.filled_quantity(old) == broker.quantities[old] == 1
     assert notifications == []
     # Exercise recovery without the Trade's filledEvent callback.
     await broker.fill(combo, 1, notify_filled=False)
@@ -216,8 +217,8 @@ async def test_direct_roll_transfers_once_and_respects_new_explicit_target(
         assert adjustment.contract == active
         assert adjustment.order.totalQuantity == 2
         await broker.fill(adjustment)
-    assert runtime.book.positions.quantity(active) == broker.quantities[active]
-    assert runtime.book.positions.quantity(old) == broker.quantities[old] == 0
+    assert runtime.book.positions.filled_quantity(active) == broker.quantities[active]
+    assert runtime.book.positions.filled_quantity(old) == broker.quantities[old] == 0
     count = len(broker.submitted)
     controller.future_roller.recover()
     model.recover()
@@ -225,7 +226,7 @@ async def test_direct_roll_transfers_once_and_respects_new_explicit_target(
 
 
 @pytest.mark.parametrize("reverse_during_roll", [False, True])
-async def test_bracket_roll_preserves_episode_and_pending_reversal(
+async def test_signal_roll_preserves_position_and_pending_reversal(
     rolling, reverse_during_roll
 ):
     """Replacement protection precedes continuation; pending OPEN stays distinct."""
@@ -238,46 +239,46 @@ async def test_bracket_roll_preserves_episode_and_pending_reversal(
     )
     model.onData(
         PositionTarget(
-            source_key="alpha",
+            signal_key="alpha",
             contract=old,
             target_quantity=2,
-            intent=PositionIntent.OPEN,
+            intent=TargetIntent.OPEN,
             metadata={"atr": 5},
         )
     )
     await broker.fill(broker.submitted[-1])
-    episode_id = runtime.book.positions.for_source("alpha").position_id
+    position_id = runtime.book.positions._for_signal("alpha").position_id
     controller.future_roller.roll()
     combo = broker.submitted[-1]
     assert isinstance(combo.contract, ibi.Bag)
     if reverse_during_roll:
         model.onData(
             PositionTarget(
-                source_key="alpha",
+                signal_key="alpha",
                 contract=next_,
                 target_quantity=-2,
-                intent=PositionIntent.REVERSE,
+                intent=TargetIntent.REVERSE,
                 metadata={"atr": 9},
             )
         )
     await broker.fill(combo, notify_filled=False)
     controller.future_roller.recover()
     await settle_events()
-    state = runtime.book.positions.for_source("alpha")
+    state = runtime.book.positions._for_signal("alpha")
     assert state.contract == active
-    assert state.position_id == episode_id
+    assert state.position_id == position_id
     assert state.target_contract == (next_ if reverse_during_roll else old)
-    assert state.bracket_inputs == {"atr": 5}
+    assert state.protection_inputs == {"atr": 5}
     key = runtime.contract_registry.series_key(old)
     assert runtime.book.rolls.for_series(key).stage is FutureRollStage.COMPLETE
     stops = runtime.book.orders.active(
-        source_key="alpha", role=StandardOrderRole.STOP_LOSS
+        signal_key="alpha", role=StandardOrderRole.STOP_LOSS
     )
     assert len(stops) == 1
     assert stops[0].trade.contract == active
-    assert stops[0].position_id == episode_id
+    assert stops[0].position_id == position_id
     assert broker.quantities[old] == 0
-    assert broker.quantities[active] == state.quantity == 2
+    assert broker.quantities[active] == state.filled_quantity == 2
     if reverse_during_roll:
         close = broker.submitted[-1]
         assert close.contract == active
@@ -289,5 +290,5 @@ async def test_bracket_roll_preserves_episode_and_pending_reversal(
         opening = broker.submitted[-1]
         assert opening.contract == next_
         await broker.fill(opening)
-        assert runtime.book.positions.for_source("alpha").position_id != episode_id
-        assert runtime.book.positions.for_source("alpha").quantity == -2
+        assert runtime.book.positions._for_signal("alpha").position_id != position_id
+        assert runtime.book.positions._for_signal("alpha").filled_quantity == -2

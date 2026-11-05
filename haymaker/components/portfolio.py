@@ -1,4 +1,4 @@
-"""Portfolio boundaries for direct and one-to-one target allocation."""
+"""Portfolio boundaries for contract and signal execution target allocation."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import ib_insync as ibi
 
 from ..base import Atom
 from ..validators import finite_number
-from .messages import PositionProposal, PositionTarget, Signal, SignalType
+from .messages import PositionRequest, PositionTarget, Signal, SignalType
 
 
 class PortfolioStateMixin(Atom):
@@ -51,52 +51,52 @@ class PortfolioStateMixin(Atom):
 
 
 class PositionAllocator(Protocol):
-    """Allocate zero or one absolute target for a one-to-one proposal.
+    """Allocate zero or one absolute target for a signal execution request.
 
     Implement this protocol when :class:`FixedSizeAllocator` does not express
-    the required one-to-one sizing policy. :class:`PortfolioWrapper` passes
-    each immutable PositionProposal to
+    the required signal execution sizing policy. :class:`PortfolioWrapper` passes
+    each immutable PositionRequest to
     :meth:`~haymaker.components.PositionAllocator.target_for`; implementations return one absolute
     PositionTarget or ``None`` to suppress execution. They must preserve
-    proposal Contract and source identity. PortfolioWrapper supplies the
-    proposal's mandatory intent on the emitted target.
+    request Contract and signal identity. PortfolioWrapper supplies the
+    request's mandatory intent on the emitted target.
     """
 
-    def target_for(self, proposal: PositionProposal) -> PositionTarget | None:
-        """Return the proposal's absolute signed target, or suppress it."""
+    def target_for(self, request: PositionRequest) -> PositionTarget | None:
+        """Return the request's absolute signed target, or suppress it."""
 
 
-Sizing = float | Mapping[str, float] | Callable[[PositionProposal], float]
+Sizing = float | Mapping[str, float] | Callable[[PositionRequest], float]
 
 
 class FixedSizeAllocator:
-    """Allocate proposal direction using fixed or source-specific size.
+    """Allocate request direction using fixed or signal-specific size.
 
     Args:
-        sizing: Positive size, mapping keyed by ``source_key``, or callable
-            evaluated for each proposal.
+        sizing: Positive size, mapping keyed by ``signal_key``, or callable
+            evaluated for each request.
 
-    Missing mapping entries raise ``KeyError``. The signed result is proposal
-    direction multiplied by the allocated size; source, Contract, and Signal
-    metadata are preserved. PortfolioWrapper adds proposal intent when the
-    target enters the one-to-one execution path.
+    Missing mapping entries raise ``KeyError``. The signed result is request
+    direction multiplied by the allocated size; signal, Contract, and Signal
+    metadata are preserved. PortfolioWrapper adds request intent when the
+    target enters the signal execution execution path.
 
-    Zero or negative sizes raise ValueError. To suppress a proposal, provide
+    Zero or negative sizes raise ValueError. To suppress a request, provide
     a custom PositionAllocator returning None rather than a zero OPEN target.
     """
 
     def __init__(self, sizing: Sizing = 1.0) -> None:
         self.sizing = sizing
 
-    def target_for(self, proposal: PositionProposal) -> PositionTarget | None:
+    def target_for(self, request: PositionRequest) -> PositionTarget | None:
         """Allocate one immutable absolute target."""
 
-        if not isinstance(proposal, PositionProposal):
-            raise TypeError("FixedSizeAllocator accepts only PositionProposal")
+        if not isinstance(request, PositionRequest):
+            raise TypeError("FixedSizeAllocator accepts only PositionRequest")
         if callable(self.sizing):
-            size = self.sizing(proposal)
+            size = self.sizing(request)
         elif isinstance(self.sizing, Mapping):
-            size = self.sizing[proposal.signal.source_key]
+            size = self.sizing[request.signal.signal_key]
         else:
             size = self.sizing
         size = finite_number(size, "allocated size")
@@ -105,27 +105,27 @@ class FixedSizeAllocator:
                 "allocated size must be positive; use a custom allocator returning None to suppress execution"
             )
         return PositionTarget(
-            contract=proposal.signal.contract,
-            target_quantity=proposal.target_direction * size,
-            source_key=proposal.signal.source_key,
-            metadata=proposal.signal.metadata,
+            contract=request.signal.contract,
+            target_quantity=request.target_direction * size,
+            signal_key=request.signal.signal_key,
+            metadata=request.signal.metadata,
         )
 
 
 class PortfolioWrapper(Atom):
-    """Adapt one-to-one PositionProposals to a narrow allocator.
+    """Adapt signal execution PositionRequests to a narrow allocator.
 
     Args:
         allocator: Object implementing :class:`PositionAllocator`.
 
-    The wrapper accepts only proposals with mandatory intent and emits zero or
+    The wrapper accepts only requests with mandatory intent and emits zero or
     one absolute PositionTarget. It is the supported adapter for dedicated
-    one-to-one execution paths; account-wide recomputation uses
+    signal execution execution paths; account-wide recomputation uses
     :class:`Portfolio` directly.
 
-    The wrapper preserves the proposal Contract, including on CLOSE. It does
-    not look up holdings: BracketExecutionModel resolves the source's held
-    Contract and orchestrates closing or reversing its episode.
+    The wrapper preserves the request Contract, including on CLOSE. It does
+    not look up holdings: BracketExecutionModel resolves the signal's held
+    Contract and orchestrates closing or reversing its position.
     """
 
     def __init__(self, allocator: PositionAllocator) -> None:
@@ -134,32 +134,32 @@ class PortfolioWrapper(Atom):
             raise TypeError("allocator must implement target_for()")
         self.allocator = allocator
 
-    def onData(self, data: PositionProposal, *args: object) -> None:
+    def onData(self, data: PositionRequest, *args: object) -> None:
         """Allocate and emit at most one target."""
 
-        proposal = data
-        if not isinstance(proposal, PositionProposal):
-            raise TypeError("PortfolioWrapper accepts only PositionProposal")
-        target = self.allocator.target_for(proposal)
+        request = data
+        if not isinstance(request, PositionRequest):
+            raise TypeError("PortfolioWrapper accepts only PositionRequest")
+        target = self.allocator.target_for(request)
         if target is None:
             return
         if not isinstance(target, PositionTarget):
             if isinstance(target, Iterable):
                 raise TypeError("PositionAllocator must not return multiple targets")
             raise TypeError("PositionAllocator must return PositionTarget or None")
-        if target.contract != proposal.signal.contract:
-            raise ValueError("PositionAllocator changed proposal Contract")
-        if target.source_key != proposal.signal.source_key:
-            raise ValueError("PositionAllocator changed proposal source_key")
-        self.dataEvent.emit(replace(target, intent=proposal.intent))
+        if target.contract != request.signal.contract:
+            raise ValueError("PositionAllocator changed request Contract")
+        if target.signal_key != request.signal.signal_key:
+            raise ValueError("PositionAllocator changed request signal_key")
+        self.dataEvent.emit(replace(target, intent=request.intent))
 
 
 class Portfolio(Atom, ABC):
     """Base account-wide Signal-to-target decision boundary.
 
     Args:
-        sources: Optional complete expected source universe. ``None`` enables
-            dynamic membership without a completeness policy. For one source,
+        signal_keys: Optional complete expected signal universe. ``None`` enables
+            dynamic membership without a completeness policy. For one signal,
             pass ``{"alpha"}``, not the bare string ``"alpha"``.
         supported_signal_types: Signal semantics accepted by this Portfolio.
 
@@ -168,12 +168,12 @@ class Portfolio(Atom, ABC):
     passes each valid Signal to :meth:`process` and emits every returned
     absolute target. Each target addresses its exact qualified Contract; the
     Portfolio chooses how to allocate among expiries and must aggregate all
-    source allocations for a Contract before emitting its setpoint.
+    signal allocations for a Contract before emitting its setpoint.
     """
 
     def __init__(
         self,
-        sources: Collection[str] | None = None,
+        signal_keys: Collection[str] | None = None,
         *,
         supported_signal_types: Collection[SignalType] = (
             SignalType.STATE,
@@ -181,15 +181,15 @@ class Portfolio(Atom, ABC):
         ),
     ) -> None:
         super().__init__()
-        if isinstance(sources, str):
+        if isinstance(signal_keys, str):
             raise TypeError(
-                "sources must be a collection of keys, for example {'alpha'}, not a string"
+                "signal_keys must be a collection of keys, for example {'alpha'}, not a string"
             )
-        self.sources = frozenset(sources) if sources is not None else None
-        if self.sources is not None and (
-            not all(isinstance(source, str) and source for source in self.sources)
+        self.signal_keys = frozenset(signal_keys) if signal_keys is not None else None
+        if self.signal_keys is not None and (
+            not all(isinstance(key, str) and key for key in self.signal_keys)
         ):
-            raise ValueError("sources must contain non-empty strings")
+            raise ValueError("signal_keys must contain non-empty strings")
         self.supported_signal_types = frozenset(supported_signal_types)
         if not self.supported_signal_types or not all(
             isinstance(signal_type, SignalType)
@@ -198,30 +198,30 @@ class Portfolio(Atom, ABC):
             raise ValueError("supported_signal_types must contain SignalType values")
 
     @property
-    def expected_sources(self) -> frozenset[str] | None:
-        """Return the declared source universe, if registration is enabled."""
+    def expected_signal_keys(self) -> frozenset[str] | None:
+        """Return the declared signal universe, if registration is enabled."""
 
-        return self.sources
+        return self.signal_keys
 
-    def positions_for_blueprint(
+    def positions_for_contract_spec(
         self, contract: ibi.Contract
     ) -> Mapping[ibi.Contract, float]:
         """Query filled holdings across a registered declaration's members.
 
         Args:
-            contract: Registered blueprint or any qualified member of it.
+            contract: Registered contract_spec or any qualified member of it.
 
         Returns:
             Read-only mapping of non-flat concrete Contracts to signed filled
             quantities. Working orders and desired allocations are not fills;
             query Book's active orders and targets separately. For one exact
-            Contract use ``self.book.positions.quantity(contract)``.
+            Contract use ``self.book.positions.filled_quantity(contract)``.
 
         Raises:
-            KeyError: If the Contract has no registered blueprint membership.
+            KeyError: If the Contract has no registered contract_spec membership.
 
-        Source-level allocations in direct mode belong to the custom Portfolio:
-        net broker fills cannot identify each contributing Signal source.
+        Signal-level allocations in contract mode belong to the custom Portfolio:
+        net broker fills cannot identify each contributing signal stream.
         """
         members = {
             member.conId for member in self.contract_registry.contracts_for(contract)
@@ -240,8 +240,8 @@ class Portfolio(Atom, ABC):
         signal = data
         if not isinstance(signal, Signal):
             raise TypeError("Portfolio accepts only Signal")
-        if self.sources is not None and signal.source_key not in self.sources:
-            raise KeyError(f"Unknown Portfolio source_key: {signal.source_key}")
+        if self.signal_keys is not None and signal.signal_key not in self.signal_keys:
+            raise KeyError(f"Unknown Portfolio signal_key: {signal.signal_key}")
         if signal.signal_type not in self.supported_signal_types:
             raise ValueError(
                 f"{type(self).__name__} does not support "
@@ -255,10 +255,10 @@ class Portfolio(Atom, ABC):
                 raise TypeError(
                     "Portfolio.process() must yield PositionTarget instances"
                 )
-            if target.source_key is not None:
-                raise ValueError("Portfolio targets must not contain source_key")
+            if target.signal_key is not None:
+                raise ValueError("Portfolio targets must not contain signal_key")
             if target.intent is not None:
-                raise ValueError("Portfolio targets must not contain PositionIntent")
+                raise ValueError("Portfolio targets must not contain TargetIntent")
             self.dataEvent.emit(target)
 
     @abstractmethod

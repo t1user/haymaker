@@ -1,4 +1,4 @@
-"""One-to-one processors for structured binary trading signals."""
+"""Signal execution processors for structured binary trading signals."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Literal, cast
 from ..base import Atom
 from ..misc import sign
 from .messages import (
-    PositionIntent,
-    PositionProposal,
+    TargetIntent,
+    PositionRequest,
     Signal,
     SignalPair,
     SignalType,
@@ -41,7 +41,7 @@ class OpposingSignalPolicy(StrEnum):
 
 
 class _BaseBinarySignalProcessor(Atom):
-    """Share validation and proposal construction for binary processors."""
+    """Share validation and request construction for binary processors."""
 
     def __init__(self, *, respect_blocked_direction: bool = False) -> None:
         super().__init__()
@@ -50,77 +50,77 @@ class _BaseBinarySignalProcessor(Atom):
         self.respect_blocked_direction = respect_blocked_direction
 
     def onData(self, data: Signal, *args: object) -> None:
-        """Process one Signal and emit a proposal only when action is needed."""
+        """Process one Signal and emit a request only when action is needed."""
 
         signal = data
         if not isinstance(signal, Signal):
             raise TypeError(f"{type(self).__name__} accepts only Signal")
-        proposal = self.process(signal)
-        if proposal is not None:
-            self.dataEvent.emit(proposal)
+        request = self.process(signal)
+        if request is not None:
+            self.dataEvent.emit(request)
 
-    def process(self, signal: Signal) -> PositionProposal | None:
-        """Return the one-to-one transition implied by ``signal``."""
+    def process(self, signal: Signal) -> PositionRequest | None:
+        """Return the signal execution transition implied by ``signal``."""
 
         raise NotImplementedError
 
-    def _proposal(
+    def _request(
         self,
         signal: Signal,
         value: float,
         *,
         current_direction: BinaryDirection,
         opposing: OpposingSignalPolicy,
-    ) -> PositionProposal | None:
+    ) -> PositionRequest | None:
         """Build the transition for one selected binary value."""
 
         direction = _binary_direction(value, "signal value")
         if direction == 0:
             if signal.signal_type is SignalType.EVENT or current_direction == 0:
                 return None
-            return PositionProposal(
+            return PositionRequest(
                 signal=signal,
                 target_direction=0,
-                intent=PositionIntent.CLOSE,
+                intent=TargetIntent.CLOSE,
             )
         if current_direction == 0:
             if (
                 self.respect_blocked_direction
-                and self.book.positions.blocked_direction(signal.source_key)
+                and self.book.positions.blocked_direction(signal.signal_key)
                 == direction
             ):
                 return None
-            return PositionProposal(
+            return PositionRequest(
                 signal=signal,
                 target_direction=direction,
-                intent=PositionIntent.OPEN,
+                intent=TargetIntent.OPEN,
             )
         if current_direction == direction:
             return None
         if opposing is OpposingSignalPolicy.CLOSE:
-            return PositionProposal(
+            return PositionRequest(
                 signal=signal,
                 target_direction=0,
-                intent=PositionIntent.CLOSE,
+                intent=TargetIntent.CLOSE,
             )
-        return PositionProposal(
+        return PositionRequest(
             signal=signal,
             target_direction=direction,
-            intent=PositionIntent.REVERSE,
+            intent=TargetIntent.REVERSE,
         )
 
-    def _current_direction(self, source_key: str) -> BinaryDirection:
-        """Return the effective signed direction for a source."""
+    def _current_direction(self, signal_key: str) -> BinaryDirection:
+        """Return the effective signed direction for a signal."""
 
-        return cast(BinaryDirection, sign(self.book.effective_quantity(source_key)))
+        return cast(BinaryDirection, sign(self.book.effective_quantity(signal_key)))
 
 
 class BinarySignalProcessor(_BaseBinarySignalProcessor):
-    """Convert scalar binary Signals into one-to-one position proposals.
+    """Convert scalar binary Signals into signal execution position requests.
 
     Use this processor when one field describes both entry and exit behavior.
     It accepts a :class:`Signal` whose value is exactly ``-1``, ``0``, or
-    ``1`` and emits zero or one :class:`PositionProposal`. From flat, a
+    ``1`` and emits zero or one :class:`PositionRequest`. From flat, a
     non-zero value opens. A matching held direction is ignored. For ``STATE``
     signals, zero closes; for ``EVENT`` signals, zero is ignored.
 
@@ -148,23 +148,23 @@ class BinarySignalProcessor(_BaseBinarySignalProcessor):
         self.opposing = opposing
         super().__init__(respect_blocked_direction=respect_blocked_direction)
 
-    def process(self, signal: Signal) -> PositionProposal | None:
+    def process(self, signal: Signal) -> PositionRequest | None:
         """Return the transition implied by a scalar binary Signal."""
 
         if not isinstance(signal, Signal):
             raise TypeError("BinarySignalProcessor accepts only Signal")
         if isinstance(signal.value, SignalPair):
             raise TypeError("BinarySignalProcessor requires a scalar Signal value")
-        return self._proposal(
+        return self._request(
             signal,
             signal.value,
-            current_direction=self._current_direction(signal.source_key),
+            current_direction=self._current_direction(signal.signal_key),
             opposing=self.opposing,
         )
 
 
 class BinaryEntryExitSignalProcessor(_BaseBinarySignalProcessor):
-    """Process separate binary entry and exit values for one source.
+    """Process separate binary entry and exit values for one signal.
 
     Use this processor when a strategy calculates independent entry and exit
     conditions. It accepts a :class:`Signal` carrying :class:`SignalPair`.
@@ -182,7 +182,7 @@ class BinaryEntryExitSignalProcessor(_BaseBinarySignalProcessor):
         ValueError: If either pair value is outside ``-1``, ``0``, and ``1``.
     """
 
-    def process(self, signal: Signal) -> PositionProposal | None:
+    def process(self, signal: Signal) -> PositionRequest | None:
         """Return the transition implied by the applicable pair member."""
 
         if not isinstance(signal, Signal):
@@ -193,9 +193,9 @@ class BinaryEntryExitSignalProcessor(_BaseBinarySignalProcessor):
             )
         _binary_direction(signal.value.entry, "entry signal value")
         _binary_direction(signal.value.exit, "exit signal value")
-        current_direction = self._current_direction(signal.source_key)
+        current_direction = self._current_direction(signal.signal_key)
         value = signal.value.entry if current_direction == 0 else signal.value.exit
-        return self._proposal(
+        return self._request(
             signal,
             value,
             current_direction=current_direction,

@@ -6,11 +6,11 @@ Strategy modules are imported after ``LiveRuntime`` has installed a ready
 runtime context. Construct components at module scope and keep the resulting
 pipeline referenced by the module.
 
-One-to-one bracketed strategy
-=============================
+Signal execution bracketed strategy
+===================================
 
 This flow turns a dataframe STATE signal into one independently attributed
-position episode:
+position identity:
 
 .. code-block:: python
 
@@ -89,18 +89,18 @@ unsuitable.
 ``TrendModel`` places ``atr`` in Signal metadata. ``FixedSizeAllocator``
 preserves it in the PositionTarget, and ``FixedStop`` consumes it after the
 entry is completely filled. Book assigns a fresh ``position_id`` to the
-episode, while Controller carries source and episode attribution to every
+position, while Controller carries signal and position attribution to every
 order and blotter row.
 
 An EVENT model uses ``SignalType.EVENT``. Its zero values are ignored by the
 processor instead of requesting a flat position. Repeating a non-zero EVENT
-represents another event, although one-to-one processing still suppresses
+represents another event, although signal execution processing still suppresses
 actions that are already satisfied by effective quantity.
 
-Account-wide direct Portfolio
-=============================
+Account-wide contract Portfolio
+===============================
 
-A direct Portfolio receives raw Signals from several sources and may change
+A contract Portfolio receives raw Signals from several signals and may change
 several execution targets after any one input:
 
 .. code-block:: python
@@ -128,23 +128,23 @@ several execution targets after any one input:
            contracts: dict[str, ibi.Contract],
            size: float,
        ) -> None:
-           super().__init__(sources=contracts)
+           super().__init__(signal_keys=contracts)
            self.contracts = contracts
            self.size = size
            self.latest: dict[str, float] = {}
 
        def process(self, signal: Signal) -> Iterable[PositionTarget]:
-           self.latest[signal.source_key] = signal.value
+           self.latest[signal.signal_key] = signal.value
            return (
                PositionTarget(
-                   contract=self.contracts[source_key],
+                   contract=self.contracts[signal_key],
                    target_quantity=(
                        0
                        if value == 0
                        else self.size if value > 0 else -self.size
                    ),
                )
-               for source_key, value in self.latest.items()
+               for signal_key, value in self.latest.items()
            )
 
 
@@ -181,13 +181,13 @@ several execution targets after any one input:
 
 The example Portfolio implements its own immediate STATE recomputation policy.
 A synchronized implementation could instead require ``as_of``, wait for all
-registered sources, define duplicate/late input handling, and persist its
+registered signals, define duplicate/late input handling, and persist its
 normalized mapping under a stable ``portfolio_key`` through Book.
 
 Each target is an absolute setpoint for its concrete Contract. This example
-uses distinct Contracts for its two sources; a Portfolio combining several
-sources on the same Contract must aggregate their allocations before emitting
-one target. Source allocation state is not inferred from net broker fills. If a newer target arrives while an
+uses distinct Contracts for its two signals; a Portfolio combining several
+signals on the same Contract must aggregate their allocations before emitting
+one target. Signal allocation state is not inferred from net broker fills. If a newer target arrives while an
 adjustment order works, it retains only the newer target and
 re-evaluates after completion. Router rules are evaluated in declaration order;
 current rules remain authoritative. On restart, an active TARGET_ADJUSTMENT

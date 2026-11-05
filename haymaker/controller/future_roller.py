@@ -14,15 +14,15 @@ from typing import TYPE_CHECKING
 import eventkit as ev  # type: ignore
 import ib_insync as ibi
 
+from haymaker.enums import ExecutionMode
 from haymaker.book import (
-    FutureRollMode,
     FutureRollStage,
     RollParticipant,
     RollState,
 )
 from haymaker.components.execution.future_roll import (
-    BracketFutureRollExecutor,
-    DirectFutureRollExecutor,
+    SignalFutureRollExecutor,
+    ContractFutureRollExecutor,
     FutureRollExecutor,
     RollHolding,
 )
@@ -44,7 +44,7 @@ class FutureRoller:
     """Discover stale futures holdings and delegate durable execution.
 
     The Controller owns one instance for the entire process. Target execution
-    models register exactly one direct or bracket executor family during
+    models register exactly one contract or signal executor family during
     strategy construction. Daily callbacks discover new work; recovery always
     resumes persisted work before creating another plan for the series.
     """
@@ -63,54 +63,53 @@ class FutureRoller:
         self,
         policy: FutureRollPolicy,
         *,
-        source_key: str | None = None,
+        signal_key: str | None = None,
         model_name: str | None = None,
     ) -> None:
-        """Configure one source (bracket) or execution model (direct) policy.
+        """Configure one signal or contract execution model policy.
 
-        Register during graph construction. Automatic-roll source opt-outs
+        Register during graph construction. Automatic-roll signal opt-outs
         still take precedence. Policy selection never changes accepted work.
         """
         if not isinstance(policy, FutureRollPolicy):
             raise TypeError("policy must be a FutureRollPolicy")
-        if (source_key is None) == (model_name is None):
-            raise ValueError("Supply exactly one of source_key or model_name")
+        if (signal_key is None) == (model_name is None):
+            raise ValueError("Supply exactly one of signal_key or model_name")
         kind, value = (
-            ("source", source_key) if source_key is not None else ("model", model_name)
+            ("signal", signal_key) if signal_key is not None else ("model", model_name)
         )
         self._policies[kind, non_empty_string(value, kind)] = policy
 
     def register_executor(
         self,
-        mode: FutureRollMode,
         executor: FutureRollExecutor | None = None,
     ) -> FutureRollExecutor:
         """Register or reuse the process's one mode-specific executor.
 
         Args:
-            mode: Mutually exclusive target-accounting mode.
             executor: Optional custom executor. When omitted, the built-in
                 implementation for the selected mode is created.
 
         Raises:
-            ValueError: If another mode or a different instance was already
-                registered.
+            RuntimeError: If no execution model has established the process mode.
+            ValueError: If the executor's mode differs or another executor is bound.
         """
 
-        if not isinstance(mode, FutureRollMode):
-            raise TypeError("mode must be a FutureRollMode")
+        mode = self.controller.execution_mode
+        if mode is None:
+            raise RuntimeError("Register an execution model before its roll executor")
         if self.executor is not None:
-            if self.executor.mode is not mode:
-                raise ValueError(
-                    "Direct and one-to-one futures-roll modes cannot be mixed"
-                )
             if executor is not None and executor is not self.executor:
                 raise ValueError("A different FutureRollExecutor is already registered")
+            if self.executor.mode is not mode:
+                raise ValueError(
+                    "Registered roll executor does not match Controller execution mode"
+                )
             return self.executor
         selected = executor or (
-            DirectFutureRollExecutor()
-            if mode is FutureRollMode.DIRECT
-            else BracketFutureRollExecutor()
+            ContractFutureRollExecutor()
+            if mode is ExecutionMode.CONTRACT
+            else SignalFutureRollExecutor()
         )
         if not isinstance(selected, FutureRollExecutor):
             raise TypeError("executor must be a FutureRollExecutor")
@@ -124,7 +123,7 @@ class FutureRoller:
         return selected
 
     def set_policies(self, policies: Mapping[str, bool]) -> None:
-        """Replace one-to-one automatic-roll declarations."""
+        """Replace signal execution automatic-roll declarations."""
 
         self.future_roll_policies = dict(policies)
 
@@ -276,8 +275,8 @@ class FutureRoller:
                 raise TypeError("Futures rolling requires a FutureSelector")
             selector = replace(selector, today=now.replace(tzinfo=None))
             identity = (
-                ("source", holding.source_key)
-                if holding.source_key is not None
+                ("signal", holding.signal_key)
+                if holding.signal_key is not None
                 else ("model", holding.execution_model_name)
             )
             policy = self._policies.get(identity, self._default_policy)
@@ -310,15 +309,15 @@ class FutureRoller:
         """Mark replacement exposure too, preventing fixed-schedule cascades."""
         if decision.occurrence is None:
             return ()
-        if holding.source_key is not None:
-            return (json.dumps(("source", holding.source_key, decision.occurrence)),)
+        if holding.signal_key is not None:
+            return (json.dumps(("signal", holding.signal_key, decision.occurrence)),)
         return tuple(
             json.dumps(("contract", con_id, decision.occurrence))
             for con_id in (holding.contract.conId, decision.destination.conId)
         )
 
     def _broker_quantity_matches(self, contract: ibi.Future) -> bool:
-        return self.book.positions.quantity(
+        return self.book.positions.filled_quantity(
             contract
         ) == self.controller.trader.position_for_contract(contract)
 
@@ -334,8 +333,8 @@ class FutureRoller:
         participants = tuple(
             RollParticipant(
                 execution_model_name=holding.execution_model_name,
-                quantity=holding.quantity,
-                source_key=holding.source_key,
+                filled_quantity=holding.filled_quantity,
+                signal_key=holding.signal_key,
                 position_id=holding.position_id,
             )
             for holding in holdings

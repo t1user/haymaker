@@ -5,9 +5,9 @@ import asyncio
 import ib_insync as ibi
 import pytest
 from copy import deepcopy
-from episode_harness import (
-    EpisodeBroker,
-    EpisodeSignalModel,
+from signal_execution_harness import (
+    PositionBroker,
+    PositionSignalModel,
     observation,
     settle_events,
 )
@@ -20,7 +20,7 @@ from haymaker.components import (
     FixedSizeAllocator,
     FixedStop,
     OpposingSignalPolicy,
-    PositionIntent,
+    TargetIntent,
     PositionTarget,
     PortfolioWrapper,
     SignalType,
@@ -32,14 +32,14 @@ from haymaker.controller.controller import SyncOutcome
 
 
 @pytest.fixture
-def episode(atom_runtime_factory):
-    """Compose the production one-to-one path around an independent broker."""
-    broker = EpisodeBroker()
+def position(atom_runtime_factory):
+    """Compose the production signal execution path around an independent broker."""
+    broker = PositionBroker()
     runtime = atom_runtime_factory(ib=broker)
     controller = Controller(trader=runtime.trader)
     runtime.bind_controller(controller)
     contract = ibi.Future("ES", conId=101, exchange="CME", localSymbol="ESU6")
-    signal = EpisodeSignalModel("alpha", contract, SignalType.EVENT)
+    signal = PositionSignalModel("alpha", contract, SignalType.EVENT)
     processor = BinarySignalProcessor(
         opposing=OpposingSignalPolicy.REVERSE, respect_blocked_direction=True
     )
@@ -53,19 +53,19 @@ def episode(atom_runtime_factory):
     return runtime, broker, signal, model, pipe
 
 
-async def test_entry_partial_fill_protection_and_commission_without_blotter(episode):
+async def test_entry_partial_fill_protection_and_commission_without_blotter(position):
     """Observe independently accounted fills and full-fill-only protection."""
-    runtime, broker, signal, model, pipe = episode
+    runtime, broker, signal, model, pipe = position
     signal.onData(observation(1))
     await settle_events()
     entry = broker.submitted[0]
     first = await broker.fill(entry, 1)
-    assert runtime.book.positions.for_source("alpha").quantity == 1
+    assert runtime.book.positions._for_signal("alpha").filled_quantity == 1
     assert broker.quantities[entry.contract] == 1
     assert len(broker.submitted) == 1
     await broker.fill(entry, 1)
     assert len(broker.submitted) == 3
-    assert runtime.book.positions.for_source("alpha").quantity == 2
+    assert runtime.book.positions._for_signal("alpha").filled_quantity == 2
     assert {
         runtime.book.orders.by_id(t.order.orderId).role for t in broker.submitted[1:]
     } == {StandardOrderRole.STOP_LOSS, StandardOrderRole.TAKE_PROFIT}
@@ -77,14 +77,14 @@ async def test_entry_partial_fill_protection_and_commission_without_blotter(epis
 
 @pytest.mark.parametrize("liquidation", ["cancelled", "suppressed"])
 async def test_failed_reset_preserves_non_flat_broker_and_durable_book(
-    episode, order_saver, state_saver, monkeypatch, liquidation
+    position, order_saver, state_saver, monkeypatch, liquidation
 ):
     """A failed close cannot erase holdings from independent broker or Book state."""
-    runtime, broker, signal, model, pipe = episode
+    runtime, broker, signal, model, pipe = position
     signal.onData(observation(1))
     entry = broker.submitted[0]
     await broker.fill(entry)
-    before = runtime.book.positions.for_source("alpha")
+    before = runtime.book.positions._for_signal("alpha")
     controller = runtime.controller
     controller.reset = True
     monkeypatch.setattr(broker, "isConnected", lambda: True)
@@ -106,60 +106,60 @@ async def test_failed_reset_preserves_non_flat_broker_and_durable_book(
     assert controller.reset is True
     assert controller._trading_disabled is True
     assert broker.quantities[entry.contract] == 2
-    assert runtime.book.positions.for_source("alpha") == before
+    assert runtime.book.positions._for_signal("alpha") == before
     assert len(broker.submitted) == (4 if liquidation == "cancelled" else 3)
     recovered = Book(
         order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
     )
-    assert recovered.positions.for_source("alpha") == before
+    assert recovered.positions._for_signal("alpha") == before
     assert (
-        recovered.positions.quantity(entry.contract)
+        recovered.positions.filled_quantity(entry.contract)
         == broker.quantities[entry.contract]
     )
     assert recovered.orders.by_id(entry.order.orderId).fills
 
 
 @pytest.mark.parametrize("exit_index", [1, 2])
-async def test_protective_exit_oca_and_direction_block(episode, exit_index):
+async def test_protective_exit_oca_and_direction_block(position, exit_index):
     """Both protective exits cancel their sibling and block same-side reentry."""
-    runtime, broker, signal, model, pipe = episode
+    runtime, broker, signal, model, pipe = position
     signal.onData(observation(1))
     await broker.fill(broker.submitted[0])
     await broker.fill(broker.submitted[exit_index])
     assert not broker.openTrades()
     assert not broker.positions()
-    assert runtime.book.positions.for_source("alpha").blocked_direction == 1
+    assert runtime.book.positions._for_signal("alpha").blocked_direction == 1
     signal.onData(observation(1))
     await settle_events()
     assert len(broker.submitted) == 3
     signal.onData(observation(-1))
-    assert runtime.book.positions.for_source("alpha").blocked_direction == 1
+    assert runtime.book.positions._for_signal("alpha").blocked_direction == 1
     await broker.fill(broker.submitted[-1], 1)
-    assert runtime.book.positions.for_source("alpha").blocked_direction is None
+    assert runtime.book.positions._for_signal("alpha").blocked_direction is None
 
 
 @pytest.mark.parametrize("direction", [-1, 1])
 @pytest.mark.parametrize("pending_entry", [False, True])
 @pytest.mark.parametrize("reverse", [False, True])
 async def test_differing_contract_exit_and_reversal(
-    episode, direction, pending_entry, reverse
+    position, direction, pending_entry, reverse
 ):
     """The wrapper forwards B; execution alone closes A before opening B."""
-    runtime, broker, signal, model, pipe = episode
+    runtime, broker, signal, model, pipe = position
     signal.onData(observation(direction))
     entry = broker.submitted[0]
     if not pending_entry:
         await broker.fill(entry)
-    original = runtime.book.positions.for_source("alpha")
+    original = runtime.book.positions._for_signal("alpha")
     incoming = ibi.Future("ES", conId=102, exchange="CME", localSymbol="ESZ6")
     signal.contract = incoming
     # EVENT zero is intentionally ignored; STATE zero explicitly requests flat.
     signal.signal_type = SignalType.STATE
     signal.onData(observation(-direction if reverse else 0, atr=9))
-    accepted = runtime.book.positions.for_source("alpha")
+    accepted = runtime.book.positions._for_signal("alpha")
     assert accepted.contract == entry.contract
     assert accepted.target_contract == incoming
-    assert accepted.bracket_inputs == {"atr": 5}
+    assert accepted.protection_inputs == {"atr": 5}
     if pending_entry:
         assert len(broker.submitted) == 1
         await broker.fill(entry)
@@ -177,12 +177,15 @@ async def test_differing_contract_exit_and_reversal(
     if reverse:
         new_entry = broker.submitted[-1]
         assert new_entry.contract == incoming
-        state = runtime.book.positions.for_source("alpha")
+        state = runtime.book.positions._for_signal("alpha")
         assert state.position_id != original.position_id
-        assert state.bracket_inputs == {"atr": 9}
+        assert state.protection_inputs == {"atr": 9}
         await broker.fill(new_entry)
         assert broker.quantities[incoming] == -direction * 2
-        assert runtime.book.positions.for_source("alpha").quantity == -direction * 2
+        assert (
+            runtime.book.positions._for_signal("alpha").filled_quantity
+            == -direction * 2
+        )
     else:
         assert not broker.positions()
         assert not broker.openTrades()
@@ -191,10 +194,10 @@ async def test_differing_contract_exit_and_reversal(
 @pytest.mark.parametrize("direction", [-1, 1])
 @pytest.mark.parametrize("close_filled", [0, 1, 2])
 async def test_reversal_recovers_new_contract_without_close_filled_callback(
-    episode, atom_runtime_factory, order_saver, state_saver, direction, close_filled
+    position, atom_runtime_factory, order_saver, state_saver, direction, close_filled
 ):
     """A detached persisted snapshot resumes the opening without old events."""
-    runtime, broker, signal, model, pipe = episode
+    runtime, broker, signal, model, pipe = position
     signal.onData(observation(direction))
     await broker.fill(broker.submitted[0])
     incoming = ibi.Future("ES", conId=102, exchange="CME", localSymbol="ESZ6")
@@ -202,8 +205,8 @@ async def test_reversal_recovers_new_contract_without_close_filled_callback(
         PositionTarget(
             contract=incoming,
             target_quantity=-direction * 2,
-            source_key="alpha",
-            intent=PositionIntent.REVERSE,
+            signal_key="alpha",
+            intent=TargetIntent.REVERSE,
             metadata={"atr": 9},
         )
     )
@@ -235,5 +238,5 @@ async def test_reversal_recovers_new_contract_without_close_filled_callback(
     new_entry = replacement.submitted[-1]
     assert new_entry.contract == incoming
     await replacement.fill(new_entry)
-    assert recovered.positions.for_source("alpha").quantity == -direction * 2
+    assert recovered.positions._for_signal("alpha").filled_quantity == -direction * 2
     assert replacement.quantities[incoming] == -direction * 2

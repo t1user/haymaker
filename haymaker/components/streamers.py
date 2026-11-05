@@ -127,7 +127,7 @@ class HistoricalDataStreamer(Streamer):
     is available; the final work-in-progress bar is excluded.
 
     Args:
-        contract: Contract blueprint registered with the runtime.
+        contract: Contract specification registered with the runtime.
         durationStr: IB duration string or desired historical bar count.
         barSizeSetting: IB bar-size string such as ``"1 hour"``.
         whatToShow: IB data type such as ``"TRADES"``.
@@ -301,7 +301,7 @@ class MktDataStreamer(Streamer):
     """Stream IB level-one market-data ticker updates.
 
     Args:
-        contract: Contract blueprint to subscribe to.
+        contract: Contract specification to subscribe to.
         tickList: IB generic tick-list string.
         timeout: Runtime timeout policy override.
 
@@ -327,7 +327,7 @@ class RealTimeBarsStreamer(Streamer):
     """Stream completed IB real-time five-second bars.
 
     Args:
-        contract: Contract blueprint to subscribe to.
+        contract: Contract specification to subscribe to.
         whatToShow: IB real-time bar data type.
         useRTH: Whether to emit regular-trading-hours bars only.
         realTimeBarsOptions: Optional IB request TagValues.
@@ -397,7 +397,7 @@ class TickByTickStreamer(Streamer):
     """Stream IB tick-by-tick ticker updates.
 
     Args:
-        contract: Contract blueprint to subscribe to.
+        contract: Contract specification to subscribe to.
         tickType: IB tick type, for example ``"Last"`` or ``"BidAsk"``.
         numberOfTicks: Historical ticks requested before live continuation.
         ignoreSize: Whether IB should omit same-price size-only changes.

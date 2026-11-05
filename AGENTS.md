@@ -4,6 +4,8 @@ Haymaker is an event-driven Interactive Brokers framework built on `ib_insync`,
 with a historical dataloader and separate dataframe research tools. Live order
 execution, reconciliation and futures rolling are high-risk code.
 
+Use the [terminology reference](docs/source/terminology.rst) for domain names; new synonyms require an explicit decision and coordinated updates.
+
 ## Workflow and scope
 
 - Explain your understanding before editing; make a short plan for non-trivial
@@ -73,8 +75,8 @@ and distinguish pre-existing failures from regressions.
   Do not scatter ad hoc Atom runtime monkeypatches.
 - Avoid importing `haymaker.app` in focused tests unless testing that entrypoint.
   Prefer lower-level components to avoid logging/runtime side effects.
-- Independent broker-boundary coverage uses `tests/episode_harness.py`,
-  `test_episode_end_to_end.py`, `test_direct_end_to_end.py`,
+- Independent broker-boundary coverage uses `tests/signal_execution_harness.py`,
+  `test_signal_execution_end_to_end.py`, `test_contract_execution_end_to_end.py`,
   `test_roll_end_to_end.py`, and `test_bracket_recovery.py`.
   Test durable recovery without replaying transient callbacks.
 
@@ -108,15 +110,15 @@ and distinguish pre-existing failures from regressions.
   before importing the strategy. Runtime does not inspect module data.
   `run_started_at` stays fixed; `workload_generation` increments before each
   supervised workload. These do not replace generic startup data.
-- Contract blueprints are registered at component construction. Runtime
+- Contract specifications are registered at component construction. Runtime
   initializes Contract details/selectors before Controller reconciliation;
   streamers start afterward. Rebuild selectors using one naive UTC timestamp
   per workload; supervised daily restarts refresh ACTIVE/NEXT roles.
-- `Atom.contract` resolves `which_contract`; `contract_blueprint` returns a
+- `Atom.contract` resolves `which_contract`; `contract_spec` returns a
   copy of the declaration. Accessing `contract_selector` raises until both
   Contract registration and selector initialization are available.
 - Registry identity is derived from the snapshotted user Contract declaration;
-  qualified members map explicitly to that blueprint. Overlapping qualification
+  qualified members map explicitly to that contract_spec. Overlapping qualification
   results from different declarations must fail atomically, never be guessed
   from symbol fields.
 - ACTIVE is the market-data/roll reference, NEXT an early-entry candidate.
@@ -145,12 +147,12 @@ and distinguish pre-existing failures from regressions.
   OrderInfo registration, rebinding, fills/commissions and reconciliation.
 - `haymaker/book/` keeps records, codecs and collection semantics together:
   `orders.py`, `positions.py`, `targets.py`, `rolls.py`, and `portfolio.py`.
-  Query through `book.orders/positions/targets/rolls/portfolios`. Book coordinates
+  Query through `book.orders/positions/targets/protection/rolls/portfolios`. Book coordinates
   accounting mutations across owners; their private mutation hooks must not be
   called by components or Controller. All owners share `PersistenceWriter`;
   never give them separate queues. Restoration reads each physical collection
   once, delegates decoding, then repairs dependent projections before trading.
-  SyncCoordinator chooses safe broker corrections; PositionState defines their
+  SyncCoordinator chooses safe broker corrections; SignalExecutionState defines their
   field changes and Book persists their accounting effects.
 - Persist complete Trade diagnostics and authoritative normalized
   Fill/Execution evidence with actual IB orderId/clientId/permId. Rebind by
@@ -160,30 +162,32 @@ and distinguish pre-existing failures from regressions.
   Broker callbacks must use Book's fill/commission/rebinding methods, not replace
   OrderInfo.trade directly. Book Mongo savers decode UTC dates as aware datetimes;
   injected persistence backends must preserve that contract and raise on failure.
+- Order and state documents use `schema_version: 1`; preflight all versions before recovery. SignalPosition, SignalTarget and ProtectionState share one internal SignalExecutionState and one flat write. ContractExecutionState keeps its ContractTarget and reset cutoff together.
 - Physical collections are `orders`, `state`, `blotter`. State identities:
-  `position:{source_key}`, `balance:{conId}`, `target:{conId}`, `roll:{series_key}`,
+  `signal_execution:{signal_key}`, `contract_position:{conId}`, `contract_execution:{conId}`, `roll:{series_key}`,
   `portfolio:{portfolio_key}`. Do not add snapshot/decision/lock collections
   without an explicit design change.
 - Queue Book mutations through one ordered critical DRAIN queue: order evidence
   precedes derived projections, and the first failed write stops dependent work.
-  Source position documents checkpoint applied fill keys atomically with quantity;
+  Signal execution documents checkpoint applied fill keys atomically with quantity;
   startup finishes only uncheckpointed fills, preserving corrections and resets.
   Rebound order records retain previous broker IDs so startup cannot count their
   obsolete documents twice. Recover completed as well as active order
   evidence. An explicit reset retains fills and persists concrete-target
-  cutoffs so old fills do not resurrect cleared direct exposure.
-- Both execution modes use maintained `ContractPosition` balances through
-  `book.positions.quantity(contract)` and `book.positions.by_contract()`;
-  `for_source`/`source_states` expose the separate one-to-one episode view.
+  cutoffs so old fills do not resurrect cleared contract exposure.
+- Both execution modes use maintained `ContractPosition` records through
+  `book.positions.filled_quantity(contract)` and `book.positions.by_contract()`;
+  `for_signal`/`by_signal` expose the separate signal execution position view.
   Normal queries never scan fills.
-  Update balances with the underlying episode/order/roll mutation, not on read.
-  Startup verifies the shared balances against durable accounting records and
-  repairs interrupted balance writes. Preserve one-to-one broker corrections;
-  do not reconstruct corrected episodes blindly from historical fills.
-  Both roll modes share BAG/explicit-leg contribution rules: explicit leg
+  Update contract positions with the underlying position/order/roll mutation, not on read.
+  Startup verifies the shared contract positions against durable accounting records and
+  repairs interrupted contract-position writes. Preserve signal execution broker corrections;
+  do not reconstruct corrected positions blindly from historical fills.
+  Controller enforces one execution mode when models register; futures rolling consumes that mode.
+  Both execution modes share BAG/explicit-leg contribution rules: explicit leg
   evidence replaces the BAG fallback instead of counting it again.
 - Reconcile aggregate logical quantity against broker net quantity per concrete
-  Contract, including opposing logical one-to-one positions. Use one successful
+  Contract, including opposing logical signal execution positions. Use one successful
   `reqPositionsAsync()` snapshot per pass. Cached/fresh disagreement retries
   locally; timeout/unavailable requests use supervisor recovery.
   Enforce one account/subaccount; compare snapshots by account and conId.
@@ -192,14 +196,14 @@ and distinguish pre-existing failures from regressions.
   Roll discovery requires reconciled connection state; a cache mismatch defers
   discovery to reconciliation rather than persisting a blocked roll.
 - `controller.position_mismatch_policy` is `fail` by default, with `correct`
-  opting into inferred one-to-one corrections. Enforce failure before order
+  opting into inferred signal execution corrections. Enforce failure before order
   shortcuts, roll advancement and protection recovery. Failed reconciliation
   skips strategy startup; the trading-disabled latch ends running strategy work
   and persists across reconnects. Keep genuine fill/commission accounting active.
   See the execution guide's position-mismatch and offline-repair contract.
 - Defer mismatch decisions while attributed OPEN/CLOSE/TARGET_ADJUSTMENT or
   roll orders work, not merely because a roll plan exists. Applied opt-in
-  corrections align quantity and target; flattening clears episode recovery
+  corrections align quantity and target; flattening clears position recovery
   inputs but preserves the direction block. Serialize full sync cycles.
 - After order/fill and position reconciliation, Controller invokes model-owned
   initial-protection recovery before missing-bracket remediation. See the
@@ -253,7 +257,7 @@ and distinguish pre-existing failures from regressions.
 writes only with explicit `--apply --source-stopped` and distinct source/fresh
 target database names. Select the actual legacy snapshot collection. Require
 reconciled, flushed, settled state; only protective orders may remain active.
-Preserve complete evidence, IB identifiers, source/episode attribution, honest
+Preserve complete evidence, IB identifiers, signal/position attribution, honest
 timestamps and deterministic provenance. Validate Book restoration in memory
 before writes and verify complete target readback. Refuse ambiguous allocations,
 changed-source retries, foreign/mixed targets and incompatible in-flight work.

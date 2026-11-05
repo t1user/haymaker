@@ -3,7 +3,7 @@
 `haymaker.runtime.InitData` to
 `haymaker.contract_registry.ContractRegistry` during restart.
 
-`blueprints` is a list of blueprints for which it was acquired.
+`contract_specs` is a list of contract_specs for which it was acquired.
 
 the data has been downloaded on 16/12/2025
 """
@@ -14,7 +14,7 @@ es = Future("ES", exchange="CME")
 dax = Future("DAX", exchange="EUREX", currency="EUR", multiplier="25")
 gc = Future("GC", exchange="COMEX")
 
-blueprints = [es, dax, gc]
+contract_specs = [es, dax, gc]
 
 details = [
     [

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from ..saver import AbstractBaseSaver
+from .schema import require_schema
 from .persistence import PersistenceWriter
 
 from collections.abc import Mapping, Sequence
@@ -137,8 +138,8 @@ class OrderInfo:
         role: Standard or custom order role.
         submitted_at: Time the controller accepted the submission.
         execution_model_name: Stable configured model identity.
-        source_key: Optional one-to-one input identity.
-        position_id: Optional independently managed position episode.
+        signal_key: Optional signal execution input identity.
+        position_id: Optional independently managed position identity.
         params: Diagnostic inputs captured at submission.
         fills: Normalized execution evidence already observed.
     """
@@ -147,7 +148,7 @@ class OrderInfo:
     role: str
     submitted_at: datetime
     execution_model_name: str
-    source_key: str | None = None
+    signal_key: str | None = None
     position_id: str | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
     fills: Sequence[FillRecord] = field(default_factory=tuple)
@@ -163,8 +164,8 @@ class OrderInfo:
         self.execution_model_name = non_empty_string(
             self.execution_model_name, "execution_model_name"
         )
-        if self.source_key is not None:
-            self.source_key = non_empty_string(self.source_key, "source_key")
+        if self.signal_key is not None:
+            self.signal_key = non_empty_string(self.signal_key, "signal_key")
         if self.position_id is not None:
             self.position_id = non_empty_string(self.position_id, "position_id")
         self.params = readonly_mapping(self.params, "params")
@@ -290,6 +291,7 @@ class OrderInfo:
         """Return the complete order document stored by Book."""
 
         return {
+            "schema_version": 1,
             "orderId": self.orderId,
             "clientId": self.trade.order.clientId,
             "permId": self.permId,
@@ -297,7 +299,7 @@ class OrderInfo:
             "role": self.role,
             "submitted_at": self.submitted_at,
             "execution_model_name": self.execution_model_name,
-            "source_key": self.source_key,
+            "signal_key": self.signal_key,
             "position_id": self.position_id,
             "params": tree(dict(self.params)),
             "fills": [record.encode() for record in self.fills],
@@ -311,14 +313,17 @@ class OrderInfo:
     def decode(cls, data: Mapping[str, Any]) -> OrderInfo:
         """Restore an OrderInfo from the current Book schema."""
 
-        if "target_key" in data:
-            raise ValueError("Old keyed order schema requires standalone conversion")
+        require_schema(data)
+        if "signal_key" not in data:
+            raise ValueError(
+                "Book order lacks signal attribution; standalone conversion required"
+            )
         return cls(
             trade=decode_tree(data["trade"]),
             role=str(data["role"]),
             submitted_at=decode_tree(data["submitted_at"]),
             execution_model_name=str(data["execution_model_name"]),
-            source_key=data.get("source_key"),
+            signal_key=data.get("signal_key"),
             position_id=data.get("position_id"),
             params=decode_tree(data.get("params", {})),
             fills=tuple(FillRecord.decode(fill) for fill in data.get("fills", ())),
@@ -353,15 +358,15 @@ class OrderStore:
         self._index_fills(info)
 
     def _index_fills(self, info: OrderInfo) -> None:
-        """Maintain source checkpoints without scanning historical orders on update."""
-        if info.source_key is not None and not isinstance(info.trade.contract, ibi.Bag):
-            self._received_keys[info.source_key].update(
+        """Maintain signal checkpoints without scanning historical orders on update."""
+        if info.signal_key is not None and not isinstance(info.trade.contract, ibi.Bag):
+            self._received_keys[info.signal_key].update(
                 record.deduplication_key for record in info.fills
             )
 
-    def received_fill_keys(self, source_key: str) -> frozenset[str]:
-        """Return evidence already received for one source."""
-        return frozenset(self._received_keys.get(source_key, ()))
+    def received_fill_keys(self, signal_key: str) -> frozenset[str]:
+        """Return evidence already received for one signal."""
+        return frozenset(self._received_keys.get(signal_key, ()))
 
     def _restore(self, order_documents: Sequence[Mapping[str, Any]]) -> None:
         """Restore canonical records, excluding documents superseded by rebinding."""
@@ -453,7 +458,7 @@ class OrderStore:
     def query(
         self,
         *,
-        source_key: str | None = None,
+        signal_key: str | None = None,
         contract: ibi.Contract | None = None,
         role: str | None = None,
         execution_model_name: str | None = None,
@@ -466,7 +471,7 @@ class OrderStore:
             info
             for info in self._items.values()
             if (not active_only or info.active)
-            and (source_key is None or info.source_key == source_key)
+            and (signal_key is None or info.signal_key == signal_key)
             and (con_id is None or info.trade.contract.conId == con_id)
             and (role is None or info.role == role)
             and (
@@ -478,7 +483,7 @@ class OrderStore:
     def active(
         self,
         *,
-        source_key: str | None = None,
+        signal_key: str | None = None,
         contract: ibi.Contract | None = None,
         role: str | None = None,
         execution_model_name: str | None = None,
@@ -486,7 +491,7 @@ class OrderStore:
         """Query active orders using any supported attribution fields."""
 
         return self.query(
-            source_key=source_key,
+            signal_key=signal_key,
             contract=contract,
             role=role,
             execution_model_name=execution_model_name,

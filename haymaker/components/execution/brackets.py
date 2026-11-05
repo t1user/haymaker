@@ -1,22 +1,22 @@
-"""Bracket-specific episode execution and protective-order builders."""
+"""Bracket-specific position execution and protective-order builders."""
 
 from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
 import ib_insync as ibi
 
-from ...book import FutureRollMode, OrderInfo, PositionState, RollState
+from ...enums import ExecutionMode
+from ...book import OrderInfo, SignalPosition, SignalTarget, RollState
 from ...contract_registry import DetailsContainer
 from ...misc import action, round_tick, sign
 from ...validators import finite_number, non_empty_string
-from ..messages import PositionIntent, PositionTarget, StandardOrderRole
+from ..messages import TargetIntent, PositionTarget, StandardOrderRole
 from .future_roll import FutureRollExecutor
 from .roll_policies import FutureRollPolicy
 from .models import ExecutionModel, _order_options
@@ -372,21 +372,21 @@ class FlexibleTakeProfitAsStopMultiple(AbstractBracketLeg):
 
 
 class BracketExecutionModel(ExecutionModel):
-    """Execute one source as independently managed bracketed episodes.
+    """Execute one signal as independently managed bracketed positions.
 
     Args:
-        source_key: Required stable source identity.
+        signal_key: Required stable signal identity.
         stop: Required protective stop leg.
         take_profit: Optional take-profit leg. Stop-loss protection remains
             critical even when no take-profit is configured.
         auto_roll_futures: Whether Controller-owned futures rolling should
-            automatically roll this source's open position. Defaults to
+            automatically roll this signal's open position. Defaults to
             ``True``; disable only when the strategy intentionally manages its
-            own one-to-one futures roll.
-        future_roll_executor: Optional process-shared bracket futures-roll
+            own signal execution futures roll.
+        future_roll_executor: Optional process-shared signal futures-roll
             executor. Omit it to use the built-in
-            :class:`BracketFutureRollExecutor`.
-        roll_policy: Optional FutureRollPolicy for this source. The default
+            :class:`SignalFutureRollExecutor`.
+        roll_policy: Optional FutureRollPolicy for this signal. The default
             rolls past contracts into ACTIVE; auto_roll_futures=False wins.
         name: Stable configured model name.
         open_order: Model-specific entry Order fields.
@@ -395,7 +395,7 @@ class BracketExecutionModel(ExecutionModel):
         take_profit_order: Model-specific take-profit Order fields.
         oca_type: IB OCA behavior; defaults to global order configuration.
 
-    Newly received targets require an initially consistent PositionIntent.
+    Newly received targets require an initially consistent TargetIntent.
     After acceptance, numeric target is authoritative and recovery derives work
     from Book instead of replaying intent. Regular closes join the protective
     orders' OCA group so the filled close cancels remaining brackets. Non-zero
@@ -403,22 +403,24 @@ class BracketExecutionModel(ExecutionModel):
     :class:`~haymaker.components.SerialTargetExecutionModel` for that policy.
 
     OPEN uses the incoming target Contract. CLOSE uses the held or pending-entry
-    Contract recorded for this source, regardless of the target Contract.
-    REVERSE closes that episode completely before opening the incoming
-    Contract as a new episode. Book persists the held and pending-target
+    Contract recorded for this signal, regardless of the target Contract.
+    REVERSE closes that position completely before opening the incoming
+    Contract as a new position. Book persists the held and pending-target
     Contracts and their bracket inputs separately, so restarts and changes to
     ACTIVE/NEXT cannot redirect a close or lose a reversal destination.
 
     If entry completion was missed while offline, recovery installs the initial
-    brackets from saved episode inputs and the quantity-weighted entry fills.
+    brackets from saved position inputs and the quantity-weighted entry fills.
     Keep the model configuration recovery-compatible. Existing stops are not
     recreated, and missing optional take-profits alone do not require repair.
     Missing execution evidence or Contract ticks prevents automatic installation.
     """
 
+    mode = ExecutionMode.SIGNAL
+
     def __init__(
         self,
-        source_key: str,
+        signal_key: str,
         *,
         stop: AbstractBracketLeg,
         take_profit: AbstractBracketLeg | None = None,
@@ -432,22 +434,22 @@ class BracketExecutionModel(ExecutionModel):
         take_profit_order: Mapping[str, Any] = {},
         oca_type: int | None = None,
     ) -> None:
-        source_key = non_empty_string(source_key, "source_key")
+        signal_key = non_empty_string(signal_key, "signal_key")
         if not isinstance(stop, AbstractBracketLeg):
             raise TypeError("stop must be an AbstractBracketLeg")
         if take_profit is not None and not isinstance(take_profit, AbstractBracketLeg):
             raise TypeError("take_profit must be an AbstractBracketLeg or None")
         if not isinstance(auto_roll_futures, bool):
             raise TypeError("auto_roll_futures must be a bool")
-        configured_roll_policy = self.runtime.future_roll_policies.get(source_key)
+        configured_roll_policy = self.runtime.future_roll_policies.get(signal_key)
         if (
             configured_roll_policy is not None
             and configured_roll_policy != auto_roll_futures
         ):
             raise ValueError(
-                f"Conflicting futures-roll policy for source {source_key!r}"
+                f"Conflicting futures-roll policy for signal {signal_key!r}"
             )
-        self.source_key = source_key
+        self.signal_key = signal_key
         self.stop = stop
         self.take_profit = take_profit
         defaults = self.runtime.order_defaults
@@ -476,30 +478,29 @@ class BracketExecutionModel(ExecutionModel):
             raise ValueError("oca_type must be 1, 2, or 3")
         super().__init__(name=name)
         self.future_roll_executor = self.controller.future_roller.register_executor(
-            FutureRollMode.BRACKET,
-            future_roll_executor,
+            future_roll_executor
         )
         self.controller.future_roller.completedEvent += self.onFutureRollCompletedEvent
         if roll_policy is not None:
             self.controller.future_roller.register_policy(
-                roll_policy, source_key=source_key
+                roll_policy, signal_key=signal_key
             )
-        self.runtime.future_roll_policies[source_key] = auto_roll_futures
+        self.runtime.future_roll_policies[signal_key] = auto_roll_futures
         self.controller.register_protection_recovery(
-            source_key, self.recover_protection
+            signal_key, self.recover_protection
         )
 
     def accept(self, target: PositionTarget) -> bool:
-        """Validate intent, persist target state, and converge the episode."""
+        """Validate intent, persist target state, and converge the position."""
 
-        if target.source_key != self.source_key:
+        if target.signal_key != self.signal_key:
             raise ValueError(
-                f"Expected source_key {self.source_key!r}, "
-                f"got {target.source_key!r}"
+                f"Expected signal_key {self.signal_key!r}, "
+                f"got {target.signal_key!r}"
             )
         if target.intent is None:
-            raise ValueError("BracketExecutionModel requires PositionIntent")
-        effective = self.book.effective_quantity(self.source_key)
+            raise ValueError("BracketExecutionModel requires TargetIntent")
+        effective = self.book.effective_quantity(self.signal_key)
         expected = self._expected_intent(effective, target.target_quantity)
         if target.intent is not expected:
             raise ValueError(
@@ -507,52 +508,52 @@ class BracketExecutionModel(ExecutionModel):
                 f"quantity {effective} and target {target.target_quantity}; "
                 f"expected {expected.value}"
             )
-        state = self.book.positions.for_source(self.source_key)
+        state = self.book.positions.for_signal(self.signal_key)
+        accepted = self.book.targets.for_signal(self.signal_key)
         if (
-            state is not None
-            and state.target_created_at is not None
-            and target.created_at < state.target_created_at
+            accepted is not None
+            and accepted.target_created_at is not None
+            and target.created_at < accepted.target_created_at
         ):
             return False
-        if state is None:
-            state = PositionState(
-                source_key=self.source_key,
-                execution_model_name=self.name,
+        if (
+            state is not None
+            and state.execution_model_name != self.name
+            and (
+                state.filled_quantity
+                or self.book.orders.active(signal_key=self.signal_key)
             )
-        elif state.execution_model_name != self.name and (
-            state.quantity or self.book.orders.active(source_key=self.source_key)
         ):
             raise ValueError(
-                f"Source {self.source_key!r} is owned by "
-                f"{state.execution_model_name!r}"
+                f"Signal {self.signal_key!r} is owned by {state.execution_model_name!r}"
             )
-        bracket_inputs = (
-            self._bracket_inputs(target.metadata) if target.target_quantity else {}
+        inputs = (
+            self._protection_inputs(target.metadata) if target.target_quantity else {}
         )
-        state = replace(
-            state,
-            execution_model_name=self.name,
-            target_contract=target.contract,
-            target_quantity=target.target_quantity,
-            target_created_at=target.created_at,
-            target_bracket_inputs=bracket_inputs,
-            updated_at=datetime.now(timezone.utc),
+        self.book.update_signal_target(
+            SignalTarget(
+                signal_key=self.signal_key,
+                execution_model_name=self.name,
+                contract=target.contract,
+                target_quantity=target.target_quantity,
+                target_created_at=target.created_at,
+                protection_inputs=inputs,
+            )
         )
-        self.book.update_position(state)
         self._converge()
         return True
 
     def recover(self) -> None:
-        """Resume the persisted source target without replaying old intent."""
+        """Resume the persisted signal target without replaying old intent."""
 
-        state = self.book.positions.for_source(self.source_key)
+        state = self.book.positions.for_signal(self.signal_key)
         if state is not None:
             if state.execution_model_name != self.name:
                 raise RuntimeError(
-                    f"Persisted source {self.source_key!r} requires missing "
+                    f"Persisted signal {self.signal_key!r} requires missing "
                     f"model {state.execution_model_name!r}"
                 )
-            for info in self.book.orders.active(source_key=self.source_key):
+            for info in self.book.orders.active(signal_key=self.signal_key):
                 if info.execution_model_name != self.name:
                     continue
                 if info.role == StandardOrderRole.OPEN:
@@ -563,7 +564,7 @@ class BracketExecutionModel(ExecutionModel):
             self._converge()
 
     def recover_protection(self) -> None:
-        """Restore missed initial brackets from the held episode's entry fills.
+        """Restore missed initial brackets from the held position's entry fills.
 
         Controller invokes this after reconciliation and before its configured
         missing-bracket policy. Existing stops, including terminal historical
@@ -572,7 +573,7 @@ class BracketExecutionModel(ExecutionModel):
         Partial entries, active exits and rolls retain their existing sequencing.
 
         Raises:
-            RuntimeError: If the episode or complete entry evidence is ambiguous.
+            RuntimeError: If the position or complete entry evidence is ambiguous.
         """
         pending = self._initial_protection()
         if pending is None:
@@ -601,15 +602,17 @@ class BracketExecutionModel(ExecutionModel):
             )
         self.ensure_entry_brackets(entries[0].trade)
 
-    def _initial_protection(self) -> tuple[PositionState, tuple[OrderInfo, ...]] | None:
-        """Select an unprotected episode without interfering with other stages."""
-        state = self.book.positions.for_source(self.source_key)
-        if state is None or not state.quantity:
+    def _initial_protection(
+        self,
+    ) -> tuple[SignalPosition, tuple[OrderInfo, ...]] | None:
+        """Select an unprotected position without interfering with other stages."""
+        state = self.book.positions.for_signal(self.signal_key)
+        if state is None or not state.filled_quantity:
             return None
         if state.execution_model_name != self.name:
-            raise RuntimeError(f"Source {self.source_key!r} belongs to another model")
-        orders = self._episode_orders(state)
-        if self.book.rolls.for_source(self.source_key) is not None or any(
+            raise RuntimeError(f"Signal {self.signal_key!r} belongs to another model")
+        orders = self._position_orders(state)
+        if self.book.rolls.for_signal(self.signal_key) is not None or any(
             info.role == StandardOrderRole.STOP_LOSS
             or (
                 info.active
@@ -620,31 +623,31 @@ class BracketExecutionModel(ExecutionModel):
             return None
         return state, orders
 
-    def _episode_orders(self, state: PositionState) -> tuple[OrderInfo, ...]:
-        """Restrict evidence to the current independently managed episode."""
+    def _position_orders(self, state: SignalPosition) -> tuple[OrderInfo, ...]:
+        """Restrict evidence to the current independently managed position."""
         if state.position_id is None:
-            raise RuntimeError("Held position has no episode identity")
+            raise RuntimeError("Held position has no position identity")
         return tuple(
             info
-            for info in self.book.orders.query(source_key=self.source_key)
+            for info in self.book.orders.query(signal_key=self.signal_key)
             if info.position_id == state.position_id
         )
 
     @staticmethod
-    def _expected_intent(effective: float, target: float) -> PositionIntent:
+    def _expected_intent(effective: float, target: float) -> TargetIntent:
         if effective == 0:
-            return PositionIntent.OPEN if target != 0 else PositionIntent.CLOSE
+            return TargetIntent.OPEN if target != 0 else TargetIntent.CLOSE
         if target == 0:
-            return PositionIntent.CLOSE
+            return TargetIntent.CLOSE
         if sign(effective) != sign(target):
-            return PositionIntent.REVERSE
+            return TargetIntent.REVERSE
         if effective == target:
-            return PositionIntent.OPEN
+            return TargetIntent.OPEN
         raise ValueError(
             "BracketExecutionModel does not support non-zero same-side resizing"
         )
 
-    def _bracket_inputs(self, metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _protection_inputs(self, metadata: Mapping[str, Any]) -> Mapping[str, Any]:
         """Retain only fields needed to reconstruct configured brackets."""
 
         required = {
@@ -660,14 +663,15 @@ class BracketExecutionModel(ExecutionModel):
         return values
 
     def _converge(self) -> None:
-        if self.book.rolls.for_source(self.source_key) is not None:
+        if self.book.rolls.for_signal(self.signal_key) is not None:
             return
-        state = self.book.positions.for_source(self.source_key)
-        if state is None or state.target_quantity is None:
+        state = self.book.positions.for_signal(self.signal_key)
+        accepted = self.book.targets.for_signal(self.signal_key)
+        if state is None or accepted is None:
             return
         active_adjustments = tuple(
             info
-            for info in self.book.orders.active(source_key=self.source_key)
+            for info in self.book.orders.active(signal_key=self.signal_key)
             if info.role
             in {
                 StandardOrderRole.OPEN,
@@ -676,19 +680,16 @@ class BracketExecutionModel(ExecutionModel):
         )
         if active_adjustments:
             return
-        current = state.quantity
-        target = state.target_quantity
+        current = state.filled_quantity
+        target = accepted.target_quantity
         if current == target:
-            if (
-                state.target_contract is not None
-                and state.target_created_at is not None
-            ):
+            if accepted.contract is not None and accepted.target_created_at is not None:
                 self._notify_target_reached(
                     PositionTarget(
-                        contract=state.target_contract,
+                        contract=accepted.contract,
                         target_quantity=target,
-                        source_key=self.source_key,
-                        created_at=state.target_created_at,
+                        signal_key=self.signal_key,
+                        created_at=accepted.target_created_at,
                     )
                 )
             return
@@ -699,32 +700,33 @@ class BracketExecutionModel(ExecutionModel):
         if current:
             self._submit_close(state)
         else:
-            self._submit_open(state)
+            self._submit_open(state, accepted)
 
     def onFutureRollCompletedEvent(self, state: RollState) -> None:
-        """Resume source convergence after its roll and protection complete."""
+        """Resume signal convergence after its roll and protection complete."""
 
         if any(
-            participant.source_key == self.source_key
+            participant.signal_key == self.signal_key
             for participant in state.participants
         ):
             self._converge()
 
-    def _submit_open(self, state: PositionState) -> None:
-        target = state.target_quantity or 0.0
+    def _submit_open(self, state: SignalPosition, accepted: SignalTarget) -> None:
+        target = accepted.target_quantity or 0.0
         if target == 0:
             return
-        contract = state.target_contract
+        contract = accepted.contract
         if contract is None:
             raise RuntimeError("Pending entry has no target Contract in Book")
-        if state.position_id is None or state.contract != state.target_contract:
-            state = self.book.create_position_episode(
-                self.source_key,
+        if state.position_id is None or state.contract != accepted.contract:
+            state = self.book.create_signal_position(
+                self.signal_key,
                 self.name,
                 contract,
                 target_quantity=target,
-                target_created_at=state.target_created_at or datetime.now(timezone.utc),
-                bracket_inputs=state.target_bracket_inputs,
+                target_created_at=accepted.target_created_at
+                or datetime.now(timezone.utc),
+                protection_inputs=accepted.protection_inputs,
             )
         order = ibi.Order(
             **self.open_options,
@@ -736,33 +738,39 @@ class BracketExecutionModel(ExecutionModel):
             order,
             role=StandardOrderRole.OPEN,
             execution_model_name=self.name,
-            source_key=self.source_key,
+            signal_key=self.signal_key,
             position_id=state.position_id,
-            params=state.bracket_inputs,
+            params=self._current_protection_inputs(state),
         )
         if trade is not None:
             self._bind_entry(trade)
 
-    def _submit_close(self, state: PositionState) -> None:
+    def _current_protection_inputs(self, state: SignalPosition) -> Mapping[str, Any]:
+        protection = self.book.protection.for_signal(state.signal_key)
+        if protection is None or protection.position_id != state.position_id:
+            raise RuntimeError("Position protection identity is unavailable")
+        return protection.protection_inputs
+
+    def _submit_close(self, state: SignalPosition) -> None:
         if state.contract is None:
-            raise RuntimeError("Cannot close an episode without its held Contract")
+            raise RuntimeError("Cannot close a position without its held Contract")
         options = {
             **self.close_options,
-            **self._active_bracket_oca_options(),
+            **self._active_signal_oca_options(),
         }
         order = ibi.Order(
             **options,
-            action=action(-sign(state.quantity)),
-            totalQuantity=abs(state.quantity),
+            action=action(-sign(state.filled_quantity)),
+            totalQuantity=abs(state.filled_quantity),
         )
         trade = self.controller.trade(
             state.contract,
             order,
             role=StandardOrderRole.CLOSE,
             execution_model_name=self.name,
-            source_key=self.source_key,
+            signal_key=self.signal_key,
             position_id=state.position_id,
-            params=state.bracket_inputs,
+            params=self._current_protection_inputs(state),
         )
         if trade is not None:
             self._bind_convergence(trade)
@@ -785,12 +793,12 @@ class BracketExecutionModel(ExecutionModel):
             cancelled=lambda _trade: self._defer(self._converge),
         )
 
-    def _active_bracket_oca_options(self) -> dict[str, Any]:
-        """Return the shared OCA identity of this episode's active brackets."""
+    def _active_signal_oca_options(self) -> dict[str, Any]:
+        """Return the shared OCA identity of this position's active brackets."""
 
         groups = {
             info.trade.order.ocaGroup
-            for info in self.book.orders.active(source_key=self.source_key)
+            for info in self.book.orders.active(signal_key=self.signal_key)
             if info.role
             in {
                 StandardOrderRole.STOP_LOSS,
@@ -802,7 +810,7 @@ class BracketExecutionModel(ExecutionModel):
             return {}
         if len(groups) != 1:
             raise RuntimeError(
-                f"Active brackets for {self.source_key!r} have different OCA groups"
+                f"Active brackets for {self.signal_key!r} have different OCA groups"
             )
         return {"ocaGroup": groups.pop(), "ocaType": self.oca_type}
 
@@ -819,7 +827,7 @@ class BracketExecutionModel(ExecutionModel):
             self.ensure_entry_brackets(trade)
         except Exception as exc:
             self.controller.disable_trading(
-                f"Initial bracket installation failed for {self.source_key!r}: {exc}"
+                f"Initial bracket installation failed for {self.signal_key!r}: {exc}"
             )
             return
         self._defer(self._converge)
@@ -828,13 +836,13 @@ class BracketExecutionModel(ExecutionModel):
         """Install missing initial protection using accounted entry executions.
 
         Both live completion and recovery use the configured bracket legs, the
-        held episode's saved inputs, and its quantity-weighted execution price.
+        held position's saved inputs, and its quantity-weighted execution price.
         Repeated calls leave existing stops untouched. A surviving take-profit
         supplies the OCA group; otherwise a new group is created for both legs.
         A missing optional take-profit alone is not repaired.
 
         Args:
-            entry_trade: The current episode's fully filled opening Trade.
+            entry_trade: The current position's fully filled opening Trade.
 
         Raises:
             RuntimeError: If evidence is incomplete, inconsistent or submission
@@ -850,26 +858,27 @@ class BracketExecutionModel(ExecutionModel):
         if info is None:
             raise RuntimeError("Entry order has no persisted evidence")
         if info.position_id != state.position_id:
-            return  # A delayed callback must never protect a subsequent episode.
+            return  # A delayed callback must never protect a subsequent position.
         trade = self._entry_for_brackets(info, state)
         dynamic, has_take_profit = self._initial_oca_options(orders, state)
         self._install_entry_brackets(trade, state, dynamic, has_take_profit)
 
-    def _entry_for_brackets(self, info: OrderInfo, state: PositionState) -> ibi.Trade:
-        """Require a complete, fill-accounted entry for this exact held episode."""
+    def _entry_for_brackets(self, info: OrderInfo, state: SignalPosition) -> ibi.Trade:
+        """Require a complete, fill-accounted entry for this exact held position."""
         trade = info.execution_trade()
         if (
             info.role != StandardOrderRole.OPEN
-            or info.source_key != self.source_key
+            or info.signal_key != self.signal_key
             or info.execution_model_name != self.name
             or state.execution_model_name != self.name
             or trade.contract != state.contract
             or trade.orderStatus.filled != trade.order.totalQuantity
-            or trade.orderStatus.filled != abs(state.quantity)
-            or trade.order.action != action(sign(state.quantity))
+            or trade.orderStatus.filled != abs(state.filled_quantity)
+            or trade.order.action != action(sign(state.filled_quantity))
             or any(
                 fill.contract != state.contract
-                or fill.execution.side != ("BOT" if state.quantity > 0 else "SLD")
+                or fill.execution.side
+                != ("BOT" if state.filled_quantity > 0 else "SLD")
                 for fill in trade.fills
             )
         ):
@@ -877,7 +886,7 @@ class BracketExecutionModel(ExecutionModel):
         return trade
 
     def _initial_oca_options(
-        self, orders: tuple[OrderInfo, ...], state: PositionState
+        self, orders: tuple[OrderInfo, ...], state: SignalPosition
     ) -> tuple[dict[str, Any], bool]:
         """Reuse a surviving take-profit's OCA identity, or allocate one group."""
         take_profits = [
@@ -887,8 +896,9 @@ class BracketExecutionModel(ExecutionModel):
             len(take_profits) != 1
             or not take_profits[0].active
             or take_profits[0].trade.contract != state.contract
-            or take_profits[0].trade.remaining() != abs(state.quantity)
-            or take_profits[0].trade.order.action != action(-sign(state.quantity))
+            or take_profits[0].trade.remaining() != abs(state.filled_quantity)
+            or take_profits[0].trade.order.action
+            != action(-sign(state.filled_quantity))
             or not take_profits[0].trade.order.ocaGroup
             or take_profits[0].trade.order.ocaType not in {1, 2, 3}
         ):
@@ -906,12 +916,12 @@ class BracketExecutionModel(ExecutionModel):
     def _install_entry_brackets(
         self,
         trade: ibi.Trade,
-        state: PositionState,
+        state: SignalPosition,
         dynamic: Mapping[str, Any],
         has_take_profit: bool,
     ) -> None:
         """Use the configured leg builders for both live and recovered entries."""
-        params = dict(self._bracket_inputs(state.bracket_inputs))
+        params = dict(self._protection_inputs(self._current_protection_inputs(state)))
         for leg, role, base_options in (
             (self.stop, StandardOrderRole.STOP_LOSS, self.stop_options),
             (
@@ -937,7 +947,7 @@ class BracketExecutionModel(ExecutionModel):
                 order,
                 role=role,
                 execution_model_name=self.name,
-                source_key=self.source_key,
+                signal_key=self.signal_key,
                 position_id=state.position_id,
                 params=memo,
             )

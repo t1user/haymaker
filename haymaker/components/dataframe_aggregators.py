@@ -198,7 +198,7 @@ class FuturesPandasAggregator(Atom):
         # these 2 properties together ensure that self.contract
         # will be the same as on streamer
         self.which_contract = streamer.which_contract
-        self.contract = streamer.contract_blueprint
+        self.contract = streamer.contract_spec
         if not isinstance(self.contract, ibi.Future):
             raise TypeError(
                 f"FuturesPandasAggregator requires a futures Contract, "

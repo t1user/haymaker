@@ -1,3 +1,4 @@
+from runtime_helpers import replace_signal_state, signal_execution_state
 import asyncio
 import datetime as dt
 import logging
@@ -13,7 +14,7 @@ import pytest
 from helpers import wait_for_condition
 
 from haymaker.async_wrappers import QueueProcessingError
-from haymaker.book import Book, OrderInfo, PositionState
+from haymaker.book import Book, OrderInfo
 from haymaker.components import (
     BracketExecutionModel,
     FixedStop,
@@ -45,8 +46,8 @@ from haymaker.trader import Trader
         {"execution_model_name": 5},
         {"role": ""},
         {"role": None},
-        {"source_key": ""},
-        {"source_key": 5},
+        {"signal_key": ""},
+        {"signal_key": 5},
         {"position_id": ""},
         {"position_id": 5},
         {"params": []},
@@ -205,7 +206,7 @@ async def test_missing_partial_order_requires_terminal_evidence(
     assert await controller.sync() is (
         SyncOutcome.OK if completed_history else SyncOutcome.FAILED
     )
-    assert controller.book.positions.quantity(trade.contract) == 1
+    assert controller.book.positions.filled_quantity(trade.contract) == 1
     assert len(info.fills) == 1
     assert info.trade.isDone() == completed_history
     assert controller.ib.reqCompletedOrdersAsync.await_count == 1
@@ -235,7 +236,7 @@ async def test_cancelled_session_trade_recovers_separate_execution_history(
     assert not await SyncCoordinator(controller).run()
     assert len(info.fills) == 1
     assert info.trade.isDone()
-    assert controller.book.positions.quantity(trade.contract) == 1
+    assert controller.book.positions.filled_quantity(trade.contract) == 1
 
 
 async def test_snapshot_compares_concrete_identity_and_rejects_multiple_accounts(
@@ -262,12 +263,12 @@ async def test_multisource_correction_fails_explicitly_after_pruning(
 ):
     """Real retry orchestration cannot infer ownership from a vanished close."""
     for source, quantity in (("alpha", 3), ("beta", 2)):
-        controller.book.update_position(
-            PositionState(
-                source_key=source,
+        controller.book._update_signal_state(
+            signal_execution_state(
+                signal_key=source,
                 execution_model_name="brackets",
                 contract=trade.contract,
-                quantity=quantity,
+                filled_quantity=quantity,
                 target_quantity=quantity,
             )
         )
@@ -283,9 +284,9 @@ async def test_multisource_correction_fails_explicitly_after_pruning(
     assert await controller.sync() is SyncOutcome.FAILED
     assert requested.await_count == 2
     assert info.trade.isDone()
-    assert controller.book.positions.for_source("alpha").quantity == 3
-    assert controller.book.positions.for_source("beta").quantity == 2
-    assert "Ambiguous source attribution" in caplog.text
+    assert controller.book.positions._for_signal("alpha").filled_quantity == 3
+    assert controller.book.positions._for_signal("beta").filled_quantity == 2
+    assert "Ambiguous signal attribution" in caplog.text
 
 
 class FakeTrader:
@@ -376,7 +377,7 @@ def save_active_order(
     controller: Controller,
     trade: ibi.Trade,
     *,
-    source_key: str = "alpha",
+    signal_key: str = "alpha",
     role: str = StandardOrderRole.OPEN,
 ) -> OrderInfo:
     """Persist an active copy of a broker Trade for sync tests."""
@@ -392,8 +393,8 @@ def save_active_order(
         trade,
         role=role,
         execution_model_name="brackets",
-        source_key=source_key,
-        position_id="episode",
+        signal_key=signal_key,
+        position_id="position",
     )
 
 
@@ -664,16 +665,16 @@ def test_trade_registers_complete_attribution_immediately(controller_runtime):
         ibi.MarketOrder("BUY", 2),
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
         params={"atr": 5},
     )
 
     assert result is trader.trades[0]
     info = runtime.book.orders.by_id(result.order.orderId)
     assert info.execution_model_name == "brackets"
-    assert info.source_key == "alpha"
-    assert info.position_id == "episode"
+    assert info.signal_key == "alpha"
+    assert info.position_id == "position"
     assert info.role == StandardOrderRole.OPEN
 
 
@@ -686,7 +687,7 @@ def test_disabled_trading_does_not_submit_or_register(controller_runtime):
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
+        signal_key="alpha",
     )
 
     assert result is None
@@ -697,9 +698,9 @@ def test_disabled_trading_does_not_submit_or_register(controller_runtime):
 @pytest.mark.asyncio
 async def test_exec_details_applies_fill_once(controller_runtime):
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
         )
@@ -709,24 +710,24 @@ async def test_exec_details_applies_fill_once(controller_runtime):
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
     )
     execution = fill(trade)
 
     await controller.onExecDetailsEvent(trade, execution)
     await controller.onExecDetailsEvent(trade, execution)
 
-    assert runtime.book.positions.for_source("alpha").quantity == 1
+    assert runtime.book.positions._for_signal("alpha").filled_quantity == 1
     assert len(runtime.book.orders.by_id(trade.order.orderId).fills) == 1
 
 
 @pytest.mark.asyncio
 async def test_offline_zero_order_id_fill_rebinds_by_perm_id(controller_runtime):
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
         )
@@ -736,7 +737,7 @@ async def test_offline_zero_order_id_fill_rebinds_by_perm_id(controller_runtime)
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
+        signal_key="alpha",
     )
     rebound = ibi.Trade(
         contract=contract(),
@@ -751,7 +752,7 @@ async def test_offline_zero_order_id_fill_rebinds_by_perm_id(controller_runtime)
     await controller.onExecDetailsEvent(rebound, fill(rebound))
 
     assert rebound.order.orderId == original.order.orderId
-    assert runtime.book.positions.for_source("alpha").quantity == 1
+    assert runtime.book.positions._for_signal("alpha").filled_quantity == 1
 
 
 @pytest.mark.asyncio
@@ -783,13 +784,13 @@ async def test_manual_trade_has_explicit_role_and_source_attribution(
     controller_runtime,
 ):
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
-            position_id="episode",
+            filled_quantity=1,
+            position_id="position",
         )
     )
     trade = ibi.Trade(
@@ -806,8 +807,8 @@ async def test_manual_trade_has_explicit_role_and_source_attribution(
 
     info = runtime.book.orders.by_id(-1)
     assert info.role == StandardOrderRole.MANUAL
-    assert info.source_key == "alpha"
-    assert info.position_id == "episode"
+    assert info.signal_key == "alpha"
+    assert info.position_id == "position"
 
 
 @pytest.mark.asyncio
@@ -828,16 +829,16 @@ async def test_commission_report_uses_book_owned_blotter(controller_runtime):
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
     )
     report = ibi.CommissionReport(execId="exec-1", commission=1)
     execution = fill(trade)
 
     await controller.onCommissionReport(trade, execution, report)
 
-    assert blotter.calls[0][1]["source_key"] == "alpha"
-    assert blotter.calls[0][1]["position_id"] == "episode"
+    assert blotter.calls[0][1]["signal_key"] == "alpha"
+    assert blotter.calls[0][1]["position_id"] == "position"
     assert blotter.calls[0][1]["role"] == StandardOrderRole.OPEN
 
 
@@ -853,8 +854,8 @@ async def test_commission_report_persists_without_blotter(controller_runtime):
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
     )
     execution = fill(trade)
     await controller.onExecDetailsEvent(trade, execution)
@@ -885,20 +886,20 @@ async def test_commission_report_skips_unknown_zero_order_id(
     assert runtime.book.blotter is None
 
 
-def test_close_position_for_source_logs_fill(controller_runtime, caplog):
+def test_close_position_for_signal_logs_fill(controller_runtime, caplog):
     runtime, controller, trader = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
-            position_id="episode",
+            filled_quantity=1,
+            position_id="position",
         )
     )
 
     with caplog.at_level(logging.INFO, logger="haymaker.controller.controller"):
-        controller.close_position_for_source("alpha", role="test close")
+        controller.close_position_for_signal("alpha", role="test close")
         close_trade = trader.trades[-1]
         close_trade.orderStatus.filled = 1
         close_trade.filledEvent.emit(close_trade)
@@ -920,15 +921,15 @@ def test_bracket_sync_requires_stop_but_not_take_profit(
     """Only an absent stop is a critical local bracket-record issue."""
 
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
-            position_id="episode",
-            bracket_inputs={"atr": 5},
+            position_id="position",
+            protection_inputs={"atr": 5},
         )
     )
     controller.trade(
@@ -940,8 +941,8 @@ def test_bracket_sync_requires_stop_but_not_take_profit(
         ),
         role=role,
         execution_model_name="brackets",
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
     )
 
     sync = BracketSync(controller)
@@ -1007,24 +1008,24 @@ def test_remove_bracket_policy_closes_source_missing_required_stop(
     controller_runtime,
 ):
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
-            position_id="episode",
-            bracket_inputs={"atr": 5},
+            position_id="position",
+            protection_inputs={"atr": 5},
         )
     )
     controller.ib.positions = Mock(return_value=[])
-    controller.close_position_for_source = Mock()
+    controller.close_position_for_signal = Mock()
 
     with pytest.raises(BracketSyncError):
         BracketSyncAction.from_policy("remove", controller).sync()
 
-    controller.close_position_for_source.assert_called_once_with(
+    controller.close_position_for_signal.assert_called_once_with(
         "alpha",
         role="MISSING_BRACKET_EMERGENCY_CLOSE",
     )
@@ -1034,15 +1035,15 @@ def test_remove_bracket_policy_defers_missing_stop_during_active_open(
     controller_runtime,
 ):
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
-            position_id="episode",
-            bracket_inputs={"atr": 5},
+            position_id="position",
+            protection_inputs={"atr": 5},
         )
     )
     controller.trade(
@@ -1050,24 +1051,24 @@ def test_remove_bracket_policy_defers_missing_stop_during_active_open(
         ibi.MarketOrder("BUY", 1),
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
     )
     controller.ib.positions = Mock(return_value=[])
-    controller.close_position_for_source = Mock()
+    controller.close_position_for_signal = Mock()
 
     BracketSyncAction.from_policy("remove", controller).sync()
 
-    controller.close_position_for_source.assert_not_called()
+    controller.close_position_for_signal.assert_not_called()
 
 
 def test_remove_bracket_policy_cancels_obsolete_bracket(
     controller_runtime,
 ):
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
         )
@@ -1077,7 +1078,7 @@ def test_remove_bracket_policy_cancels_obsolete_bracket(
         ibi.StopOrder("SELL", 1, stopPrice=100),
         role=StandardOrderRole.STOP_LOSS,
         execution_model_name="brackets",
-        source_key="alpha",
+        signal_key="alpha",
     )
     controller.ib.positions = Mock(return_value=[])
     controller.cancel = Mock()
@@ -1092,9 +1093,9 @@ def test_remove_bracket_policy_defers_obsolete_bracket_during_active_close(
     controller_runtime,
 ):
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
         )
@@ -1104,14 +1105,14 @@ def test_remove_bracket_policy_defers_obsolete_bracket_during_active_close(
         ibi.StopOrder("SELL", 1, stopPrice=100),
         role=StandardOrderRole.STOP_LOSS,
         execution_model_name="brackets",
-        source_key="alpha",
+        signal_key="alpha",
     )
     controller.trade(
         contract(),
         ibi.MarketOrder("SELL", 1),
         role=StandardOrderRole.CLOSE,
         execution_model_name="brackets",
-        source_key="alpha",
+        signal_key="alpha",
     )
     controller.ib.positions = Mock(return_value=[])
     controller.cancel = Mock()
@@ -1128,13 +1129,13 @@ async def test_reset_waits_for_cancellation_before_logical_close(
     """Reset never overlaps an attributed close with a working exit order."""
 
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
-            position_id="episode",
+            filled_quantity=1,
+            position_id="position",
         )
     )
     protective = ibi.Trade(
@@ -1206,13 +1207,13 @@ async def test_reset_liquidates_when_cancellation_does_not_complete(
     """Cancellation grace expiry never prevents an urgent flattening attempt."""
 
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
-            position_id="episode",
+            filled_quantity=1,
+            position_id="position",
         )
     )
     protective = ibi.Trade(
@@ -1271,15 +1272,15 @@ async def test_reset_liquidates_when_cancellation_does_not_complete(
 async def test_reset_does_not_hide_residual_behind_flat_state(
     controller_runtime,
 ):
-    """A stale flat PositionState does not suppress broker liquidation."""
+    """A stale flat SignalExecutionState does not suppress broker liquidation."""
 
     runtime, controller, _ = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=0,
+            filled_quantity=0,
         )
     )
     controller.ib.openTrades = Mock(return_value=[])
@@ -1341,16 +1342,16 @@ async def test_run_keeps_book_when_explicit_reset_fails(controller_runtime):
 def reset_runtime(controller_runtime):
     """Seed recovery state and isolate startup sync from the real reset path."""
     runtime, controller, trader = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=2,
-            position_id="episode",
+            filled_quantity=2,
+            position_id="position",
             target_contract=contract(),
             target_quantity=2,
-            bracket_inputs={"atr": 5},
+            protection_inputs={"atr": 5},
             blocked_direction=-1,
         )
     )
@@ -1374,14 +1375,14 @@ def reset_runtime(controller_runtime):
 
 async def assert_reset_fails(controller: Controller) -> None:
     """Verify a failed reset preserves recovery state and the one-run flag."""
-    before = dict(controller.book.positions.source_states())
+    before = dict(controller.book.positions._signal_states())
 
     assert await controller.run() is SyncOutcome.FAILED
 
     assert controller._trading_disabled is True
     assert controller.reset is True
     cast(Mock, controller.book.clear_state).assert_not_called()
-    assert controller.book.positions.source_states() == before
+    assert controller.book.positions._signal_states() == before
 
 
 @pytest.mark.parametrize("residual", [False, True])
@@ -1409,8 +1410,10 @@ async def test_reset_requires_full_liquidation_fill(
     liquidation.orderStatus.filled = filled
     liquidation.orderStatus.remaining = remaining
     if residual:
-        state = runtime.book.positions.for_source("alpha")
-        runtime.book.update_position(replace(state, quantity=0))
+        state = runtime.book.positions._for_signal("alpha")
+        runtime.book._update_signal_state(
+            replace_signal_state(state, filled_quantity=0)
+        )
         controller.ib.reqPositionsAsync.side_effect = [
             [ibi.Position("test", contract(), 2, 100)],
             [],
@@ -1430,8 +1433,10 @@ async def test_reset_fails_on_suppressed_liquidation(reset_runtime, residual, ca
     runtime, controller, _ = reset_runtime
     controller.trade.return_value = None
     if residual:
-        state = runtime.book.positions.for_source("alpha")
-        runtime.book.update_position(replace(state, quantity=0))
+        state = runtime.book.positions._for_signal("alpha")
+        runtime.book._update_signal_state(
+            replace_signal_state(state, filled_quantity=0)
+        )
         controller.ib.reqPositionsAsync.side_effect = [
             [ibi.Position("test", contract(), 2, 100)],
             [],
@@ -1443,7 +1448,7 @@ async def test_reset_fails_on_suppressed_liquidation(reset_runtime, residual, ca
     assert "liquidation suppressed: contract=" in caplog.text
     assert "ESM6" in caplog.text
     if not residual:
-        assert "source=alpha" in caplog.text
+        assert "signal=alpha" in caplog.text
 
 
 @pytest.mark.parametrize("logical_filled", [False, True])
@@ -1474,7 +1479,7 @@ async def test_reset_discovers_residuals_from_requested_positions(
     if logical_filled:
         assert await controller.run() is SyncOutcome.OK
         runtime.book.clear_state.assert_called_once()
-        assert runtime.book.positions.source_states() == {}
+        assert runtime.book.positions._signal_states() == {}
         assert controller.reset is False
         assert controller._trading_disabled is False
     else:
@@ -1565,8 +1570,8 @@ async def test_reset_uses_cache_only_for_best_effort_residual_close(
 ):
     """Cached residuals can be attempted, but only a later request proves flatness."""
     runtime, controller, _ = reset_runtime
-    state = runtime.book.positions.for_source("alpha")
-    runtime.book.update_position(replace(state, quantity=0))
+    state = runtime.book.positions._for_signal("alpha")
+    runtime.book._update_signal_state(replace_signal_state(state, filled_quantity=0))
     controller.ib.positions.return_value = [ibi.Position("test", contract(), 2, 100)]
     controller.ib.reqPositionsAsync.side_effect = [
         ConnectionError("discovery unavailable"),
@@ -1600,14 +1605,14 @@ async def test_reset_keeps_suppression_failure_after_residual_fills(reset_runtim
 async def test_reset_does_not_swallow_submission_failure(reset_runtime, exception):
     """Broker and persistence submission exceptions remain fail-stop exceptions."""
     runtime, controller, _ = reset_runtime
-    before = dict(runtime.book.positions.source_states())
+    before = dict(runtime.book.positions._signal_states())
     controller.trade.side_effect = exception("submission unavailable")
 
     with pytest.raises(exception, match="submission unavailable"):
         await controller.run()
 
     runtime.book.clear_state.assert_not_called()
-    assert runtime.book.positions.source_states() == before
+    assert runtime.book.positions._signal_states() == before
     assert controller.reset is True
 
 
@@ -1617,14 +1622,14 @@ async def test_target_verification_uses_absolute_quantity(controller_runtime, ca
     target = PositionTarget(
         contract=contract(),
         target_quantity=3,
-        source_key="alpha",
+        signal_key="alpha",
     )
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=2,
+            filled_quantity=2,
             target_quantity=target.target_quantity,
             target_contract=target.contract,
             target_created_at=target.created_at,
@@ -1649,15 +1654,15 @@ async def test_target_verification_does_not_wait_for_protective_orders(
     target = PositionTarget(
         contract=contract(),
         target_quantity=1,
-        source_key="alpha",
+        signal_key="alpha",
     )
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=target.contract,
             target_contract=target.contract,
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
             target_created_at=target.created_at,
         )
@@ -1667,7 +1672,7 @@ async def test_target_verification_does_not_wait_for_protective_orders(
         ibi.Order(action="SELL", totalQuantity=1, orderType="STP"),
         role=role,
         execution_model_name="brackets",
-        source_key="alpha",
+        signal_key="alpha",
     )
     controller.execution_verification_delay = 60
 
@@ -1687,15 +1692,15 @@ async def test_superseded_target_is_not_verified_or_compared_with_broker(
     old = PositionTarget(
         contract=contract(),
         target_quantity=1,
-        source_key="alpha",
+        signal_key="alpha",
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=old.contract,
-            quantity=2,
+            filled_quantity=2,
             target_quantity=2,
             target_created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         )
@@ -1712,18 +1717,18 @@ async def test_superseded_target_is_not_verified_or_compared_with_broker(
 @pytest.mark.parametrize(
     "policy", ["normal", "disabled", "closed_market", "rejections"]
 )
-def test_emergency_reset_liquidation_is_registered_with_episode_attribution(
+def test_emergency_reset_liquidation_is_registered_with_position_attribution(
     controller_runtime, monkeypatch, quantity, policy
 ):
     """Emergency reset bypasses submission policy but retains Book attribution."""
     runtime, controller, trader = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=quantity,
-            position_id="episode",
+            filled_quantity=quantity,
+            position_id="position",
         )
     )
     position = ibi.Position("account", contract(), quantity, 100)
@@ -1757,8 +1762,8 @@ def test_emergency_reset_liquidation_is_registered_with_episode_attribution(
     assert trade.order.totalQuantity == abs(quantity)
     assert info.role == StandardOrderRole.LIQUIDATION
     assert info.execution_model_name == "brackets"
-    assert info.source_key == "alpha"
-    assert info.position_id == "episode"
+    assert info.signal_key == "alpha"
+    assert info.position_id == "position"
 
 
 @pytest.mark.parametrize("entrypoint", ["direct", "startup"])
@@ -1768,16 +1773,16 @@ async def test_emergency_reset_failure_leaves_trading_disabled(
 ):
     """Every entry point disables trading even when broker or persistence work fails."""
     runtime, controller, trader = controller_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=2,
-            position_id="episode",
+            filled_quantity=2,
+            position_id="position",
         )
     )
-    before = dict(runtime.book.positions.source_states())
+    before = dict(runtime.book.positions._signal_states())
     monkeypatch.setattr(
         runtime.ib, "positions", lambda: [ibi.Position("test", contract(), 2, 100)]
     )
@@ -1808,7 +1813,7 @@ async def test_emergency_reset_failure_leaves_trading_disabled(
     assert controller._trading_disabled is True
     assert trader.trades == []
     clear_state.assert_not_called()
-    assert runtime.book.positions.source_states() == before
+    assert runtime.book.positions._signal_states() == before
 
 
 @pytest.mark.asyncio
@@ -2028,17 +2033,17 @@ async def test_fill_between_position_snapshots_retries_and_converges(
     controller, atom_runtime, monkeypatch
 ):
     target_contract = contract()
-    initial_state = PositionState(
-        source_key="alpha",
+    initial_state = signal_execution_state(
+        signal_key="alpha",
         execution_model_name="brackets",
         contract=target_contract,
-        quantity=0,
+        filled_quantity=0,
         target_quantity=1,
         target_created_at=datetime.now(timezone.utc),
-        position_id="episode",
-        bracket_inputs={"atr": 2},
+        position_id="position",
+        protection_inputs={"atr": 2},
     )
-    controller.book.update_position(initial_state)
+    controller.book._update_signal_state(initial_state)
     broker_position = ibi.Position(
         account="DU123",
         contract=target_contract,
@@ -2061,7 +2066,9 @@ async def test_fill_between_position_snapshots_retries_and_converges(
         request_count += 1
         if request_count == 1:
             cached_positions.append(broker_position)
-            controller.book.update_position(replace(initial_state, quantity=1))
+            controller.book._update_signal_state(
+                replace_signal_state(initial_state, filled_quantity=1)
+            )
         return [broker_position]
 
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", requested_positions)
@@ -2074,7 +2081,7 @@ async def test_fill_between_position_snapshots_retries_and_converges(
     assert request_count == 2
     assert atom_runtime.restart_requests == []
     assert not controller._trading_disabled
-    assert controller.book.positions.for_source("alpha").quantity == 1
+    assert controller.book.positions._for_signal("alpha").filled_quantity == 1
 
 
 @pytest.mark.asyncio
@@ -2259,7 +2266,7 @@ async def test_unknown_broker_orders_are_cancelled_without_disabling_trading(
     assert cancelled == [trade]
     assert not controller._trading_disabled
     assert controller.book.orders.by_id(trade.order.orderId) is None
-    assert controller.book.positions.quantity(trade.contract) == 0
+    assert controller.book.positions.filled_quantity(trade.contract) == 0
 
 
 @pytest.mark.asyncio
@@ -2353,7 +2360,7 @@ async def test_open_trade_refresh_does_not_skip_bracket_sync(
 
 
 @pytest.mark.parametrize(
-    ("role", "initial_quantity", "broker_quantity", "source_key"),
+    ("role", "initial_quantity", "broker_quantity", "signal_key"),
     [
         (StandardOrderRole.OPEN, 0, 1, "alpha"),
         (StandardOrderRole.CLOSE, 3, 2, "alpha"),
@@ -2367,21 +2374,21 @@ async def test_sync_back_reports_offline_partial_fill_for_open_order(
     role,
     initial_quantity,
     broker_quantity,
-    source_key,
+    signal_key,
 ):
     """Reconnect accounts partial executions before comparing positions."""
 
     target_contract = contract()
-    if source_key is not None:
-        controller.book.update_position(
-            PositionState(
-                source_key=source_key,
+    if signal_key is not None:
+        controller.book._update_signal_state(
+            signal_execution_state(
+                signal_key=signal_key,
                 execution_model_name="brackets",
                 contract=target_contract,
-                quantity=initial_quantity,
+                filled_quantity=initial_quantity,
                 target_quantity=3 if role == StandardOrderRole.OPEN else 0,
                 target_created_at=datetime.now(timezone.utc),
-                position_id="episode",
+                position_id="position",
             )
         )
     action = "SELL" if role == StandardOrderRole.CLOSE else "BUY"
@@ -2402,9 +2409,9 @@ async def test_sync_back_reports_offline_partial_fill_for_open_order(
     info = controller.register_order(
         saved_trade,
         role=role,
-        execution_model_name="brackets" if source_key is not None else "serial",
-        source_key=source_key,
-        position_id="episode" if source_key is not None else None,
+        execution_model_name="brackets" if signal_key is not None else "serial",
+        signal_key=signal_key,
+        position_id="position" if signal_key is not None else None,
     )
     broker_trade = deepcopy(saved_trade)
     offline_fill = fill(broker_trade, exec_id=f"{role}-offline", quantity=1)
@@ -2433,11 +2440,11 @@ async def test_sync_back_reports_offline_partial_fill_for_open_order(
     assert await SyncCoordinator(controller).run()
     assert info.trade is broker_trade
     assert len(info.fills) == 1
-    assert controller.book.positions.quantity(target_contract) == broker_quantity
+    assert controller.book.positions.filled_quantity(target_contract) == broker_quantity
 
     assert await SyncCoordinator(controller).run()
     assert len(info.fills) == 1
-    assert controller.book.positions.quantity(target_contract) == broker_quantity
+    assert controller.book.positions.filled_quantity(target_contract) == broker_quantity
 
     live_fill = fill(broker_trade, exec_id=f"{role}-live", quantity=2)
     broker_trade.fills.append(live_fill)
@@ -2446,7 +2453,7 @@ async def test_sync_back_reports_offline_partial_fill_for_open_order(
     broker_trade.orderStatus.remaining = 0
     await controller.onExecDetailsEvent(broker_trade, live_fill)
     assert len(info.fills) == 2
-    assert controller.book.positions.quantity(target_contract) == (
+    assert controller.book.positions.filled_quantity(target_contract) == (
         0 if role == StandardOrderRole.CLOSE else 3
     )
 
@@ -2456,12 +2463,12 @@ async def test_sync_rejects_conflicting_fill_history(controller, monkeypatch):
     """A repeated execution identity cannot silently change accounted quantity."""
 
     target_contract = contract()
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=target_contract,
-            position_id="episode",
+            position_id="position",
         )
     )
     saved_trade = ibi.Trade(
@@ -2477,8 +2484,8 @@ async def test_sync_rejects_conflicting_fill_history(controller, monkeypatch):
         saved_trade,
         role=StandardOrderRole.OPEN,
         execution_model_name="brackets",
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
     )
     await controller.onExecDetailsEvent(
         saved_trade,
@@ -2518,12 +2525,12 @@ async def test_sync_coordinator_back_reports_done_trade_before_restart_gate(
 ):
     old_trade = deepcopy(trade)
     info = save_active_order(controller, old_trade)
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=old_trade.contract,
-            position_id="episode",
+            position_id="position",
         )
     )
     done_trade = deepcopy(trade)
@@ -2553,7 +2560,7 @@ async def test_sync_coordinator_back_reports_done_trade_before_restart_gate(
     assert not result
     assert not coordinator.request_restart
     assert await wait_for_condition(
-        lambda: controller.book.positions.for_source("alpha").quantity == 1
+        lambda: controller.book.positions._for_signal("alpha").filled_quantity == 1
     )
     assert info.trade is done_trade
 
@@ -2596,12 +2603,12 @@ async def test_sync_coordinator_requests_restart_before_position_correction(
 ):
     controller.position_mismatch_policy = "correct"
     corrected = []
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
         )
     )
     set_broker_state(controller, monkeypatch)
@@ -2618,7 +2625,7 @@ async def test_sync_coordinator_requests_restart_before_position_correction(
     assert not result
     assert coordinator.request_restart
     assert corrected == []
-    assert controller.book.positions.for_source("alpha").quantity == 1
+    assert controller.book.positions._for_signal("alpha").filled_quantity == 1
 
 
 @pytest.mark.asyncio
@@ -2627,12 +2634,12 @@ async def test_sync_coordinator_allows_position_correction_after_restart(
 ):
     controller.position_mismatch_policy = "correct"
     corrected = []
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
         )
     )
     set_broker_state(controller, monkeypatch)
@@ -2656,15 +2663,15 @@ async def test_sync_defers_position_correction_while_open_order_is_active(
     controller, monkeypatch
 ):
     target_contract = contract()
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=target_contract,
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
             target_created_at=datetime.now(timezone.utc),
-            position_id="episode",
+            position_id="position",
         )
     )
     open_trade = ibi.Trade(
@@ -2692,9 +2699,9 @@ async def test_sync_defers_position_correction_while_open_order_is_active(
 
     assert result
     assert not coordinator.request_restart
-    state = controller.book.positions.for_source("alpha")
+    state = controller.book.positions._for_signal("alpha")
     assert state is not None
-    assert state.quantity == 1
+    assert state.filled_quantity == 1
     assert state.target_quantity == 1
 
 
@@ -2704,17 +2711,17 @@ async def test_broker_flat_correction_supersedes_target_before_recovery(
 ):
     controller.position_mismatch_policy = "correct"
     old_target_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
             target_created_at=old_target_time,
-            position_id="episode",
+            position_id="position",
             blocked_direction=1,
-            bracket_inputs={"atr": 2},
+            protection_inputs={"atr": 2},
         )
     )
     set_broker_state(controller, monkeypatch)
@@ -2730,14 +2737,14 @@ async def test_broker_flat_correction_supersedes_target_before_recovery(
     ).run()
 
     assert not result
-    state = controller.book.positions.for_source("alpha")
+    state = controller.book.positions._for_signal("alpha")
     assert state is not None
-    assert state.quantity == 0
+    assert state.filled_quantity == 0
     assert state.target_quantity == 0
     assert state.target_created_at is not None
     assert state.target_created_at > old_target_time
     assert state.position_id is None
-    assert state.bracket_inputs == {}
+    assert state.protection_inputs == {}
     assert state.blocked_direction == 1
 
     submissions = []
@@ -2859,7 +2866,7 @@ async def test_callbacks_rebind_accounting_before_recovery(
             restore=True,
         )
         assert len(recovered.orders.query()) == 1
-        assert recovered.positions.quantity(contract()) == 1
+        assert recovered.positions.filled_quantity(contract()) == 1
         if event == "commission":
             assert recovered.orders.by_id(55).fills[0].commission_report == report
 

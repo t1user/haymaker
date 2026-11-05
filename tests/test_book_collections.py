@@ -1,5 +1,7 @@
 """Collection locality must retain coordinated accounting and recovery semantics."""
 
+from runtime_helpers import signal_execution_state
+
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
@@ -8,34 +10,33 @@ import ib_insync as ibi
 import mongomock
 import pytest
 
+from haymaker.enums import ExecutionMode
 from haymaker.book import (
     Book,
-    FutureRollMode,
-    PositionState,
     RollParticipant,
     RollState,
-    TargetState,
+    ContractTarget,
 )
 from haymaker.saver import MongoSaver
 from test_book import contract, fill, order_info, trade
 
 
-def test_source_states_are_distinct_from_net_contract_balances(book):
-    """Source episodes stay discoverable even when opposing holdings net to zero."""
+def test_by_signal_are_distinct_from_net_contract_contract_positions(book):
+    """Source positions stay discoverable even when opposing holdings net to zero."""
     for source, quantity in (("long", 2), ("short", -2)):
-        book.update_position(
-            PositionState(
-                source_key=source,
+        book._update_signal_state(
+            signal_execution_state(
+                signal_key=source,
                 execution_model_name="brackets",
                 contract=contract(),
-                quantity=quantity,
+                filled_quantity=quantity,
             )
         )
-    sources = book.positions.source_states()
+    sources = book.positions._signal_states()
     assert set(sources) == {"long", "short"}
-    assert book.positions.for_source("absent") is None
-    assert len(book.positions.source_states_for_contract(contract())) == 2
-    assert book.positions.quantity(contract()) == 0
+    assert book.positions._for_signal("absent") is None
+    assert len(book.positions.signal_positions_for_contract(contract())) == 2
+    assert book.positions.filled_quantity(contract()) == 0
     assert book.positions.by_contract() == {}
     with pytest.raises(TypeError):
         sources["intruder"] = sources["long"]
@@ -45,8 +46,10 @@ def test_restoration_reads_each_physical_collection_once(
     book, order_saver, state_saver, monkeypatch
 ):
     """Owners decode their documents without separate whole-collection queries."""
-    book.update_position(PositionState(source_key="alpha", execution_model_name="b"))
-    target = TargetState(
+    book._update_signal_state(
+        signal_execution_state(signal_key="alpha", execution_model_name="b")
+    )
+    target = ContractTarget(
         contract=contract(),
         execution_model_name="serial",
         target_quantity=2,
@@ -67,17 +70,17 @@ def test_restoration_reads_each_physical_collection_once(
     order_read.assert_called_once_with({})
     state_read.assert_called_once_with({})
     assert recovered.targets.for_contract(contract()) == target
-    assert recovered.positions.for_source("alpha").quantity == 0
+    assert recovered.positions._for_signal("alpha").filled_quantity == 0
     assert recovered.portfolios.load("allocation") == {"weights": {"ES": 0.5}}
 
 
 def test_stale_target_cannot_change_accounting_cutoff(book):
-    """Recency rejection must happen before reset-boundary or balance changes."""
+    """Recency rejection must happen before reset-boundary or contract_position changes."""
     opening = trade()
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     book.apply_fill(opening, fill(opening))
     timestamp = datetime.now(timezone.utc)
-    target = TargetState(
+    target = ContractTarget(
         contract=opening.contract,
         execution_model_name="serial",
         target_quantity=3,
@@ -87,11 +90,10 @@ def test_stale_target_cannot_change_accounting_cutoff(book):
     stale = replace(
         target,
         target_created_at=timestamp - timedelta(days=1),
-        fill_evidence_start_at=timestamp,
     )
     assert book.update_target(stale) is target
     assert book.targets.cutoffs == {}
-    assert book.positions.quantity(opening.contract) == 1
+    assert book.positions.filled_quantity(opening.contract) == 1
 
 
 async def test_all_owners_share_evidence_before_projection_order(
@@ -109,7 +111,7 @@ async def test_all_owners_share_evidence_before_projection_order(
 
     def record_state(document):
         """Observe each state owner through the same physical backend."""
-        writes.append((document["state_type"], document.get("quantity")))
+        writes.append((document["state_type"], document.get("filled_quantity")))
         save_state(document)
 
     monkeypatch.setattr(order_saver, "save", record_order)
@@ -119,7 +121,7 @@ async def test_all_owners_share_evidence_before_projection_order(
     book.save_order(order_info(opening))
     book.apply_fill(opening, fill(opening))
     book.update_target(
-        TargetState(
+        ContractTarget(
             contract=contract(),
             execution_model_name="serial",
             target_quantity=3,
@@ -131,9 +133,9 @@ async def test_all_owners_share_evidence_before_projection_order(
     assert writes == [
         ("order", 0),
         ("order", 1),
-        ("position", 1),
-        ("balance", 1),
-        ("target", None),
+        ("signal_execution", 1),
+        ("contract_position", 1),
+        ("contract_execution", None),
         ("portfolio", None),
     ]
 
@@ -159,7 +161,7 @@ def test_recovered_shorter_trade_log_cannot_drop_new_fill_evidence(state_saver):
     recovered = Book(
         order_saver=saver, state_saver=state_saver, save_async=False, restore=True
     )
-    assert recovered.positions.quantity(contract()) == 1
+    assert recovered.positions.filled_quantity(contract()) == 1
     saved_fill = recovered.orders.by_id(rebound.order.orderId).fills[0]
     assert saved_fill.commission_report == report
 
@@ -167,9 +169,9 @@ def test_recovered_shorter_trade_log_cannot_drop_new_fill_evidence(state_saver):
 def test_in_place_trade_id_change_rekeys_its_contribution(
     book, order_saver, state_saver
 ):
-    """Mutable IB objects must not leave a second live or persisted order balance."""
+    """Mutable IB objects must not leave a second live or persisted order contract_position."""
     opening = trade()
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     book.apply_fill(opening, fill(opening))
     opening.order.orderId = 22
     book.rebind_trade(opening)
@@ -179,7 +181,7 @@ def test_in_place_trade_id_change_rekeys_its_contribution(
         order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
     )
     assert len(recovered.orders.query()) == 1
-    assert recovered.positions.quantity(contract()) == 1
+    assert recovered.positions.filled_quantity(contract()) == 1
 
 
 def test_conflicting_broker_ids_fail_before_rebinding(book):
@@ -197,7 +199,7 @@ def test_reused_superseded_id_fails_without_losing_evidence(
 ):
     """A cyclic alias history must not silently remove every version of an order."""
     opening = trade()
-    book.save_order(order_info(opening, source_key=None))
+    book.save_order(order_info(opening, signal_key=None))
     book.apply_fill(opening, fill(opening))
     book.rebind_trade(trade(order_id=2))
     with pytest.raises(ValueError, match="superseded broker orderId"):
@@ -205,34 +207,34 @@ def test_reused_superseded_id_fails_without_losing_evidence(
     recovered = Book(
         order_saver=order_saver, state_saver=state_saver, save_async=False, restore=True
     )
-    assert recovered.positions.quantity(contract()) == 1
+    assert recovered.positions.filled_quantity(contract()) == 1
     assert len(recovered.orders.query()) == 1
 
 
 @pytest.mark.parametrize("bag_first", [False, True])
-def test_bracket_roll_accounts_leg_evidence_like_direct_rolls(book, bag_first):
+def test_signal_roll_accounts_leg_evidence_like_contract_rolls(book, bag_first):
     """BAG fallback and explicit legs describe one movement in both modes."""
     old, new = contract(1), contract(2)
-    book.update_position(
-        PositionState(
-            source_key="alpha",
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=old,
-            quantity=2,
+            filled_quantity=2,
         )
     )
     book.update_roll(
         RollState(
             series_key="es",
-            mode=FutureRollMode.BRACKET,
+            mode=ExecutionMode.SIGNAL,
             executor_name="roller",
             old_contract=old,
             new_contract=new,
             participants=(
                 RollParticipant(
-                    source_key="alpha",
+                    signal_key="alpha",
                     execution_model_name="brackets",
-                    quantity=2,
+                    filled_quantity=2,
                 ),
             ),
         )
@@ -243,7 +245,7 @@ def test_bracket_roll_accounts_leg_evidence_like_direct_rolls(book, bag_first):
         order_info(
             rolling,
             role="ROLL",
-            source_key="alpha",
+            signal_key="alpha",
             params={"roll_state_key": "es", "old_contract": old, "new_contract": new},
         )
     )

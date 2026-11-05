@@ -180,9 +180,9 @@ def test_BarAggregator_rejects_unknown_future_adjustment():
 
 
 def test_onStart_receives_streamer(Atom):
-    blueprint = ibi.Future("NQ", exchange="CME")
+    contract_spec = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -219,9 +219,9 @@ def test_onStart_accepts_atom_interface(Atom):
 
 
 def test_onStart_works_as_part_of_Pipe(Atom):
-    blueprint = ibi.Future("NQ", exchange="CME")
+    contract_spec = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -244,9 +244,9 @@ def test_onStart_works_as_part_of_Pipe(Atom):
 
 
 def test_HistoricalDataStreamerAccepted(Atom):
-    blueprint = ibi.Future("NQ", exchange="CME")
+    contract_spec = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -258,8 +258,8 @@ def test_HistoricalDataStreamerAccepted(Atom):
 
 
 def test_wrong_streamer_fails(Atom):
-    blueprint = ibi.Future("NQ", exchange="CME")
-    streamer = MktDataStreamer(contract=blueprint, tickList="212")
+    contract_spec = ibi.Future("NQ", exchange="CME")
+    streamer = MktDataStreamer(contract=contract_spec, tickList="212")
     aggregator = BarAggregator(NoFilter())
     with pytest.raises(WrongStreamer):
         aggregator.validate_source(streamer)

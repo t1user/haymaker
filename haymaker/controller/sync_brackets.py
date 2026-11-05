@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal
 
 import ib_insync as ibi
 
-from haymaker.book import OrderInfo, PositionState
+from haymaker.book import OrderInfo, SignalPosition
 from haymaker.components.messages import StandardOrderRole
 
 if TYPE_CHECKING:
@@ -27,9 +27,9 @@ class BracketSyncError(Exception):
 
 @dataclass(frozen=True)
 class BracketIssue:
-    """Describe a one-to-one position missing its protective stop."""
+    """Describe a signal execution position missing its protective stop."""
 
-    state: PositionState
+    state: SignalPosition
     existing_orders: tuple[OrderInfo, ...]
 
 
@@ -66,8 +66,8 @@ class BracketSync:
     def compare_bracket_records(self) -> None:
         """Require attributed stops without requiring optional take-profits."""
 
-        for source_key, state in self.controller.book.positions.source_states().items():
-            orders = self.controller.book.orders.active(source_key=source_key)
+        for signal_key, state in self.controller.book.positions.by_signal().items():
+            orders = self.controller.book.orders.active(signal_key=signal_key)
             entry_active = any(info.role == StandardOrderRole.OPEN for info in orders)
             exit_active = any(info.role == StandardOrderRole.CLOSE for info in orders)
             brackets = tuple(
@@ -79,33 +79,37 @@ class BracketSync:
                     StandardOrderRole.TAKE_PROFIT,
                 }
             )
-            if not state.quantity and not exit_active:
-                self.obsolete_brackets.extend((source_key, info) for info in brackets)
+            if not state.filled_quantity and not exit_active:
+                self.obsolete_brackets.extend((signal_key, info) for info in brackets)
             elif (
-                state.quantity
-                and state.bracket_inputs
+                state.filled_quantity
+                and (
+                    protection := self.controller.book.protection.for_signal(signal_key)
+                )
+                and protection.protection_inputs
                 and not entry_active
                 and not exit_active
-                and self.controller.book.rolls.for_source(source_key) is None
-                and not self._episode_is_protected(state, brackets)
+                and self.controller.book.rolls.for_signal(signal_key) is None
+                and not self._signal_position_is_protected(state, brackets)
             ):
                 self.missing_brackets.append(
                     BracketIssue(state=state, existing_orders=brackets)
                 )
 
     @staticmethod
-    def _episode_is_protected(
-        state: PositionState, brackets: tuple[OrderInfo, ...]
+    def _signal_position_is_protected(
+        state: SignalPosition, brackets: tuple[OrderInfo, ...]
     ) -> bool:
-        """Require a stop covering this episode's concrete exposure."""
+        """Require a stop covering this position's concrete exposure."""
         return any(
             info.role == StandardOrderRole.STOP_LOSS
             and info.position_id == state.position_id
             and info.execution_model_name == state.execution_model_name
             and info.trade.contract == state.contract
-            and info.trade.order.action == ("SELL" if state.quantity > 0 else "BUY")
+            and info.trade.order.action
+            == ("SELL" if state.filled_quantity > 0 else "BUY")
             and info.trade.order.orderType in {"STP", "STP LMT", "TRAIL", "FIX PEGGED"}
-            and info.trade.remaining() == abs(state.quantity)
+            and info.trade.remaining() == abs(state.filled_quantity)
             for info in brackets
         )
 
@@ -164,18 +168,18 @@ class BracketSyncAction(ABC):
         return action(controller)
 
     def report(self) -> None:
-        for source_key, info in self.bracket_sync.obsolete_brackets:
+        for signal_key, info in self.bracket_sync.obsolete_brackets:
             log.error(
                 "Obsolete bracket for %s: %s orderId=%s",
-                source_key,
+                signal_key,
                 info.role,
                 info.orderId,
             )
         for issue in self.bracket_sync.missing_brackets:
             log.error(
                 "Missing stop for %s position=%s",
-                issue.state.source_key,
-                issue.state.quantity,
+                issue.state.signal_key,
+                issue.state.filled_quantity,
             )
         for protection in self.bracket_sync.exposed_positions:
             log.error(
@@ -203,7 +207,7 @@ class WarnBracketSyncAction(BracketSyncAction):
 
 
 class RemoveBracketSyncAction(BracketSyncAction):
-    """Close missing-bracket sources and cancel obsolete brackets."""
+    """Close missing-bracket signals and cancel obsolete brackets."""
 
     async def run(self) -> None:
         """Confirm incompatible exit cancellations before submitting a close."""
@@ -215,8 +219,9 @@ class RemoveBracketSyncAction(BracketSyncAction):
             incompatible = (
                 any(
                     trade.contract != state.contract
-                    or trade.order.action != ("SELL" if state.quantity > 0 else "BUY")
-                    or trade.remaining() != abs(state.quantity)
+                    or trade.order.action
+                    != ("SELL" if state.filled_quantity > 0 else "BUY")
+                    or trade.remaining() != abs(state.filled_quantity)
                     or not trade.order.ocaGroup
                     or trade.order.ocaType not in {1, 2, 3}
                     for trade in exits
@@ -254,8 +259,8 @@ class RemoveBracketSyncAction(BracketSyncAction):
     def sync(self) -> None:
         self.report()
         for issue in self.bracket_sync.missing_brackets:
-            self.controller.close_position_for_source(
-                issue.state.source_key,
+            self.controller.close_position_for_signal(
+                issue.state.signal_key,
                 role="MISSING_BRACKET_EMERGENCY_CLOSE",
             )
         for _, info in self.bracket_sync.obsolete_brackets:

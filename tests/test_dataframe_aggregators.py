@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import ib_insync as ibi
 import pandas as pd
 import pytest
-from contract_details_for_registry import blueprints, details
+from contract_details_for_registry import contract_specs, details
 from helpers import wait_for_condition
 from sample_barDataList import sample_barDataList
 
@@ -31,8 +31,8 @@ def registry_with_data():
     # this date ensures that active and next contracts are different
     # some tests rely on this
     registry = ContractRegistry(today=datetime(2025, 12, 12))
-    for blueprint in blueprints:
-        registry.register_blueprint(blueprint)
+    for contract_spec in contract_specs:
+        registry.register_contract_spec(contract_spec)
 
     registry.reset_data(details)
     return registry
@@ -61,9 +61,9 @@ def make_aggregator() -> FuturesPandasAggregator:
 
 
 def test_HistoricalDataStreamerAccepted():
-    blueprint = ibi.Future("NQ", exchange="CME")
+    contract_spec = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -75,8 +75,8 @@ def test_HistoricalDataStreamerAccepted():
 
 
 def test_wrong_streamer_fails():
-    blueprint = ibi.Future("NQ", exchange="CME")
-    streamer = MktDataStreamer(contract=blueprint, tickList="212")
+    contract_spec = ibi.Future("NQ", exchange="CME")
+    streamer = MktDataStreamer(contract=contract_spec, tickList="212")
     aggregator = make_aggregator()
     with pytest.raises(WrongStreamer):
         aggregator.validate_source(streamer)
@@ -104,9 +104,9 @@ def test_onStart_accepts_atom_interface():
 
 
 def test_sync_extracts_which_contract():
-    blueprint = ibi.Future("NQ", exchange="CME")
+    contract_spec = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -117,10 +117,10 @@ def test_sync_extracts_which_contract():
     assert aggregator.which_contract is ActiveNext.NEXT
 
 
-def test_sync_extracts_blueprint():
-    blueprint = ibi.Future("NQ", exchange="CME")
+def test_sync_extracts_contract_spec():
+    contract_spec = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -128,16 +128,16 @@ def test_sync_extracts_blueprint():
     streamer.which_contract = ActiveNext.NEXT
     aggregator = make_aggregator()
     aggregator.sync_with_streamer(streamer)
-    assert aggregator.contract_blueprint == blueprint
-    assert aggregator.contract_blueprint is not blueprint
+    assert aggregator.contract_spec == contract_spec
+    assert aggregator.contract_spec is not contract_spec
 
 
 def test_FuturesPandasAggregator_has_the_same_contract_as_Streamer(
     registry_runtime,
 ):
-    blueprint = ibi.Future("ES", exchange="CME")
+    contract_spec = ibi.Future("ES", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -146,7 +146,7 @@ def test_FuturesPandasAggregator_has_the_same_contract_as_Streamer(
     # even though which_contract is mistakenly set differently on the aggregator
     aggregator = make_aggregator()
     aggregator.which_contract = ActiveNext.ACTIVE
-    aggregator._contract_blueprint = blueprint
+    aggregator._contract_spec = contract_spec
     # contracts are different before syncing
     assert aggregator.contract is not streamer.contract
     # ...it should get synced
@@ -156,9 +156,9 @@ def test_FuturesPandasAggregator_has_the_same_contract_as_Streamer(
 
 
 def test_params_extracted_from_streamer():
-    blueprint = ibi.Future("NQ", exchange="CME")
+    contract_spec = ibi.Future("NQ", exchange="CME")
     streamer = HistoricalDataStreamer(
-        contract=blueprint,
+        contract=contract_spec,
         durationStr="1D",
         barSizeSetting="30 secs",
         whatToShow="TRADES",
@@ -188,7 +188,7 @@ def test_sync_rejects_non_future_contract():
 def test_sync_accepts_continuous_future_after_contract_resolution(
     atom_runtime_factory,
 ):
-    """A continuous-future blueprint resolves to a concrete Future at startup."""
+    """A continuous-future contract_spec resolves to a concrete Future at startup."""
 
     registry = ContractRegistry(today=datetime(2025, 12, 12))
     atom_runtime_factory(contract_registry=registry)

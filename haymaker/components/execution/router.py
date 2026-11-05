@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 import ib_insync as ibi
 
 from ...base import Atom
-from ...book import OrderInfo, TargetState
+from ...book import OrderInfo, ContractTarget
 from ...validators import qualified_contract
 from ..messages import PositionTarget, StandardOrderRole
 from .models import ExecutionModel
@@ -47,7 +47,7 @@ class ExecutionRouter(Atom):
             closed.
 
     Model names must be unique. Current rules always select the model. An
-    active direct adjustment order may continue only when those rules still
+    active contract adjustment order may continue only when those rules still
     select its persisted owner; a disagreement blocks routed execution for the
     workload rather than silently overriding the rules.
     """
@@ -89,7 +89,7 @@ class ExecutionRouter(Atom):
         if generation != self._started_generation:
             self._started_generation = generation
             self._blocked_reason = self._working_order_block_reason()
-            assignments: tuple[TargetState, ...] = ()
+            assignments: tuple[ContractTarget, ...] = ()
             if self._blocked_reason is None:
                 try:
                     assignments = self._idle_target_assignments()
@@ -112,8 +112,8 @@ class ExecutionRouter(Atom):
 
         if not isinstance(data, PositionTarget):
             raise TypeError("ExecutionRouter accepts only PositionTarget")
-        if data.source_key is not None:
-            raise ValueError("ExecutionRouter accepts only direct targets")
+        if data.signal_key is not None:
+            raise ValueError("ExecutionRouter accepts only contract targets")
         if self._blocked_reason is not None:
             log.critical(
                 "PositionTarget suppressed while ExecutionRouter is blocked: %s",
@@ -150,11 +150,11 @@ class ExecutionRouter(Atom):
         return model
 
     def _working_order_block_reason(self) -> str | None:
-        """Check active direct adjustments against the current routing rules."""
+        """Check active contract adjustments against the current routing rules."""
         grouped: dict[int, list[OrderInfo]] = {}
         for info in self.book.orders.active(role=StandardOrderRole.TARGET_ADJUSTMENT):
-            if info.source_key is not None:
-                return f"Active TARGET_ADJUSTMENT orderId={info.orderId} has source attribution"
+            if info.signal_key is not None:
+                return f"Active TARGET_ADJUSTMENT orderId={info.orderId} has signal attribution"
             grouped.setdefault(info.trade.contract.conId, []).append(info)
         for con_id, orders in grouped.items():
             owners = {info.execution_model_name for info in orders}
@@ -163,7 +163,7 @@ class ExecutionRouter(Atom):
             owner = next(iter(owners))
             state = self.book.targets.for_contract(orders[0].trade.contract)
             if state is None:
-                return f"active TARGET_ADJUSTMENT for conId={con_id} has no recoverable TargetState"
+                return f"active TARGET_ADJUSTMENT for conId={con_id} has no recoverable ContractTarget"
             try:
                 selected = self._model_for_rules(self._target_from_state(state))
             except Exception as exc:
@@ -172,10 +172,10 @@ class ExecutionRouter(Atom):
                 return f"active TARGET_ADJUSTMENT for conId={con_id} belongs to {owner!r}, but current rules select {selected.name!r}"
         return None
 
-    def _idle_target_assignments(self) -> tuple[TargetState, ...]:
+    def _idle_target_assignments(self) -> tuple[ContractTarget, ...]:
         """Build current-rule ownership updates for idle recovered targets."""
 
-        assignments: list[TargetState] = []
+        assignments: list[ContractTarget] = []
         for state in self.book.targets.all():
             if self.book.orders.active(
                 contract=state.contract,
@@ -189,8 +189,8 @@ class ExecutionRouter(Atom):
         return tuple(assignments)
 
     @staticmethod
-    def _target_from_state(state: TargetState) -> PositionTarget:
-        """Reconstruct the PositionTarget fields persisted for direct recovery."""
+    def _target_from_state(state: ContractTarget) -> PositionTarget:
+        """Reconstruct the PositionTarget fields persisted for contract recovery."""
 
         return PositionTarget(
             contract=state.contract,
@@ -262,10 +262,10 @@ def where(predicate: TargetPredicate) -> TargetPredicate:
         The same callable for use in ExecutionRule.
 
     Note:
-        Predicates used for recoverable direct execution must be deterministic
+        Predicates used for recoverable contract execution must be deterministic
         from the persisted concrete Contract, target quantity, and
         creation time.
-        Signal metadata is not part of TargetState recovery.
+        Signal metadata is not part of ContractTarget recovery.
     """
 
     if not callable(predicate):

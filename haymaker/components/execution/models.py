@@ -11,7 +11,8 @@ from typing import Any
 import ib_insync as ibi
 
 from ...base import Atom
-from ...book import FutureRollMode, RollState, TargetState
+from ...enums import ExecutionMode
+from ...book import RollState, ContractTarget
 from ...misc import action, sign
 from ...validators import non_empty_string, order_field_validator, qualified_contract
 from ..messages import PositionTarget, StandardOrderRole
@@ -48,6 +49,11 @@ class ExecutionModel(Atom, ABC):
     not arbitrary target metadata, and may be repeated after recovery.
     """
 
+    @property
+    @abstractmethod
+    def mode(self) -> ExecutionMode:
+        """Declare the model's execution mode as a class attribute on subclasses."""
+
     def __init__(self, *, name: str | None = None) -> None:
         super().__init__()
         self.name = non_empty_string(
@@ -58,6 +64,7 @@ class ExecutionModel(Atom, ABC):
         if runtime is None or getattr(runtime, "controller", None) is None:
             raise RuntimeError(f"{type(self).__name__} requires a ready RuntimeContext")
         self.controller = runtime.controller
+        self.controller.register_execution_mode(self.mode)
         self._started_generation = -1
         self._bound_trades: dict[int, ibi.Trade] = {}
         self.targetReachedEvent = ibi.Event("targetReachedEvent")
@@ -116,7 +123,7 @@ class ExecutionModel(Atom, ABC):
 
     def _notify_target_reached(self, target: PositionTarget) -> None:
         """Emit once per live accepted setpoint, after its Book projection settles."""
-        identity = target.source_key or target.contract.conId
+        identity = target.signal_key or target.contract.conId
         version = (target.created_at, target.target_quantity)
         if self._reached.get(identity) != version:
             self._reached[identity] = version
@@ -145,9 +152,9 @@ class SerialTargetExecutionModel(ExecutionModel):
         name: Stable configured model name.
         order: Model-specific IB order fields. Precedence is built-in market
             fallback, global opening defaults, then this mapping.
-        future_roll_executor: Optional process-shared direct futures-roll
+        future_roll_executor: Optional process-shared contract futures-roll
             executor. Omit it to use the built-in
-            :class:`DirectFutureRollExecutor`.
+            :class:`ContractFutureRollExecutor`.
         roll_policy: Optional FutureRollPolicy for this model's holdings.
             The default rolls only past contracts into ACTIVE.
 
@@ -156,6 +163,8 @@ class SerialTargetExecutionModel(ExecutionModel):
     per concrete Contract. Different expiries have independent setpoints; a
     Portfolio, not this model, chooses how to allocate among them.
     """
+
+    mode = ExecutionMode.CONTRACT
 
     def __init__(
         self,
@@ -172,8 +181,7 @@ class SerialTargetExecutionModel(ExecutionModel):
         }
         super().__init__(name=name)
         self.future_roll_executor = self.controller.future_roller.register_executor(
-            FutureRollMode.DIRECT,
-            future_roll_executor,
+            future_roll_executor
         )
         self.controller.future_roller.completedEvent += self.onFutureRollCompletedEvent
         if roll_policy is not None:
@@ -183,8 +191,8 @@ class SerialTargetExecutionModel(ExecutionModel):
 
     def accept(self, target: PositionTarget) -> bool:
         """Persist the newest concrete target without changing its Contract."""
-        if target.source_key is not None:
-            raise ValueError("SerialTargetExecutionModel does not accept source_key")
+        if target.signal_key is not None:
+            raise ValueError("SerialTargetExecutionModel does not accept signal_key")
         current = self.book.targets.for_contract(target.contract)
         if current is not None and target.created_at < current.target_created_at:
             return False
@@ -196,7 +204,7 @@ class SerialTargetExecutionModel(ExecutionModel):
                 f"Active adjustment for conId={target.contract.conId} belongs to {owner!r}"
             )
         self.book.update_target(
-            TargetState(
+            ContractTarget(
                 execution_model_name=self.name,
                 contract=target.contract,
                 target_quantity=target.target_quantity,
@@ -233,7 +241,7 @@ class SerialTargetExecutionModel(ExecutionModel):
         state = self.book.targets.for_contract(contract)
         if state is None or state.execution_model_name != self.name:
             return
-        delta = state.target_quantity - self.book.positions.quantity(contract)
+        delta = state.target_quantity - self.book.positions.filled_quantity(contract)
         if not delta:
             self._notify_target_reached(
                 PositionTarget(
@@ -262,6 +270,7 @@ class SerialTargetExecutionModel(ExecutionModel):
 
 
 __all__ = [
+    "ExecutionMode",
     "ExecutionModel",
     "SerialTargetExecutionModel",
 ]

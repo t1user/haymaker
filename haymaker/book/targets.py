@@ -1,4 +1,4 @@
-"""Latest direct targets and concrete-contract recovery identities."""
+"""Latest contract targets and concrete-contract recovery identities."""
 
 from __future__ import annotations
 
@@ -18,23 +18,31 @@ from ..validators import (
 )
 from types import MappingProxyType
 from ..saver import AbstractBaseSaver
+from .schema import require_schema
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .positions import PositionStore, SignalTarget
+
 from .persistence import utc_now, PersistenceWriter
 
 
 @dataclass(frozen=True, kw_only=True)
-class TargetState:
-    """Recover the latest shared direct-execution target.
+class ContractTarget:
+    """Accepted desired exposure for one concrete Contract.
 
-    ``fill_evidence_start_at`` is Book-owned reset state. It preserves order
-    and Fill history while excluding evidence that predates an explicit
-    account-state clear from the rebuilt direct position.
+    Args:
+        execution_model_name: Owner responsible for converging this contract.
+        contract: Qualified contract identifying one concrete conId.
+        target_quantity: Absolute signed desired exposure, excluding working orders.
+        target_created_at: Accepted target message time used for supersession.
+        updated_at: Time this accepted record was last updated.
     """
 
     execution_model_name: str
     contract: ibi.Contract
     target_quantity: float
     target_created_at: datetime
-    fill_evidence_start_at: datetime | None = None
     updated_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
@@ -50,90 +58,126 @@ class TargetState:
             finite_number(self.target_quantity, "target_quantity"),
         )
         aware_datetime(self.target_created_at, "target_created_at")
-        if self.fill_evidence_start_at is not None:
-            aware_datetime(
-                self.fill_evidence_start_at,
-                "fill_evidence_start_at",
-            )
         aware_datetime(self.updated_at, "updated_at")
 
     def encode(self) -> dict[str, Any]:
-        """Serialize a concrete target and its reset cutoff."""
+        """Serialize accepted target fields for the shared recovery document."""
         return {
-            "state_key": f"target:{self.contract.conId}",
-            "state_type": "target",
+            "schema_version": 1,
+            "state_key": f"contract_execution:{self.contract.conId}",
+            "state_type": "contract_execution",
             "execution_model_name": self.execution_model_name,
             "conId": self.contract.conId,
             "contract": tree(self.contract),
             "target_quantity": self.target_quantity,
             "target_created_at": self.target_created_at,
-            "fill_evidence_start_at": self.fill_evidence_start_at,
             "updated_at": self.updated_at,
         }
 
     @classmethod
-    def decode(cls, data: Mapping[str, Any]) -> TargetState:
+    def decode(cls, data: Mapping[str, Any]) -> ContractTarget:
         """Restore a concrete target; old keyed schemas require conversion."""
-        if "target_key" in data or data.get("state_key") != f"target:{data['conId']}":
+        require_schema(data)
+        if data.get("state_key") != f"contract_execution:{data['conId']}":
             raise ValueError("Old keyed target schema requires standalone conversion")
-        return cls(
+        target = cls(
             execution_model_name=str(data["execution_model_name"]),
             contract=decode_tree(data["contract"]),
             target_quantity=float(data["target_quantity"]),
             target_created_at=decode_tree(data["target_created_at"]),
-            fill_evidence_start_at=decode_tree(data.get("fill_evidence_start_at")),
             updated_at=decode_tree(data["updated_at"]),
+        )
+
+        if target.contract.conId != data["conId"]:
+            raise ValueError("Contract target identity does not match its Contract")
+        return target
+
+
+@dataclass(frozen=True, kw_only=True)
+class ContractExecutionState:
+    """Keep a target, its reset cutoff and tombstone in one atomic document."""
+
+    target: ContractTarget
+    fill_evidence_start_at: datetime | None = None
+    cleared: bool = False
+
+    def __post_init__(self) -> None:
+        if self.fill_evidence_start_at is not None:
+            aware_datetime(self.fill_evidence_start_at, "fill_evidence_start_at")
+
+    def encode(self) -> dict[str, Any]:
+        return {
+            **self.target.encode(),
+            "fill_evidence_start_at": self.fill_evidence_start_at,
+            "cleared": self.cleared,
+        }
+
+    @classmethod
+    def decode(cls, data: Mapping[str, Any]) -> ContractExecutionState:
+        return cls(
+            target=ContractTarget.decode(data),
+            fill_evidence_start_at=decode_tree(data.get("fill_evidence_start_at")),
+            cleared=bool(data.get("cleared", False)),
         )
 
 
 class TargetStore:
-    """Own latest concrete targets and durable reset cutoffs, not allocation policy."""
+    """Query accepted targets; signal records share the position-state owner."""
 
-    def __init__(self, saver: AbstractBaseSaver, writer: PersistenceWriter) -> None:
-        """Share Book's state collection and ordered writer."""
+    def __init__(
+        self,
+        saver: AbstractBaseSaver,
+        writer: PersistenceWriter,
+        positions: PositionStore,
+    ) -> None:
         self._saver = saver
         self._writer = writer
-        self._items: dict[int, TargetState] = {}
-        self._cutoffs: dict[int, datetime] = {}
+        self._positions = positions
+        self._items: dict[int, ContractExecutionState] = {}
 
     @property
     def cutoffs(self) -> Mapping[int, datetime]:
         """Expose read-only reset boundaries used by position accounting."""
-        return MappingProxyType(self._cutoffs)
+        return MappingProxyType(
+            {
+                key: state.fill_evidence_start_at
+                for key, state in self._items.items()
+                if state.fill_evidence_start_at is not None
+            }
+        )
 
-    def for_contract(self, contract: ibi.Contract) -> TargetState | None:
+    def for_signal(self, signal_key: str) -> SignalTarget | None:
+        """Return the accepted signal target, if one exists."""
+        state = self._positions._for_signal(signal_key)
+        return state.target if state is not None else None
+
+    def for_contract(self, contract: ibi.Contract) -> ContractTarget | None:
         """Return the latest setpoint for one qualified concrete Contract."""
-        return self._items.get(qualified_contract(contract).conId)
+        state = self._items.get(qualified_contract(contract).conId)
+        return state.target if state is not None and not state.cleared else None
 
-    def _put(self, state: TargetState) -> TargetState:
-        """Persist an accepted latest target without overwriting newer decisions."""
-        current = self._items.get(state.contract.conId)
-        if current is not None and state.target_created_at < current.target_created_at:
+    def _put(self, target: ContractTarget) -> ContractTarget:
+        current = self.for_contract(target.contract)
+        if current is not None and target.target_created_at < current.target_created_at:
             return current
-        cutoff = self._cutoffs.get(state.contract.conId)
-        if cutoff is not None:
-            state = replace(state, fill_evidence_start_at=cutoff)
+        state = ContractExecutionState(
+            target=target,
+            fill_evidence_start_at=self.cutoffs.get(target.contract.conId),
+        )
         self._writer.save(self._saver, state.encode())
-        self._items[state.contract.conId] = state
-        if state.fill_evidence_start_at is not None:
-            self._cutoffs[state.contract.conId] = state.fill_evidence_start_at
-        return state
+        self._items[target.contract.conId] = state
+        return target
 
     def _restore(self, document: Mapping[str, Any]) -> None:
-        """Restore a target or its cleared tombstone without issuing live writes."""
-        state = TargetState.decode(document)
-        if state.fill_evidence_start_at is not None:
-            self._cutoffs[state.contract.conId] = state.fill_evidence_start_at
-        if not document.get("cleared", False):
-            self._items[state.contract.conId] = state
+        state = ContractExecutionState.decode(document)
+        self._items[state.target.contract.conId] = state
 
     def _clear(self, contracts: Collection[ibi.Contract], cleared_at: datetime) -> None:
-        """Persist tombstones, including residual exposure without a prior target."""
-        targets = dict(self._items)
+        targets = {target.contract.conId: target for target in self.all()}
         for contract in contracts:
             targets.setdefault(
                 contract.conId,
-                TargetState(
+                ContractTarget(
                     execution_model_name="reset",
                     contract=contract,
                     target_quantity=0,
@@ -141,24 +185,29 @@ class TargetStore:
                 ),
             )
         for target in targets.values():
-            document = replace(
-                target,
-                target_quantity=0,
-                target_created_at=cleared_at,
+            state = ContractExecutionState(
+                target=replace(
+                    target,
+                    target_quantity=0,
+                    target_created_at=cleared_at,
+                    updated_at=cleared_at,
+                ),
                 fill_evidence_start_at=cleared_at,
-                updated_at=cleared_at,
-            ).encode()
-            document["cleared"] = True
-            self._writer.save(self._saver, document)
-            self._cutoffs[target.contract.conId] = cleared_at
-        self._items.clear()
+                cleared=True,
+            )
+            self._writer.save(self._saver, state.encode())
+            self._items[target.contract.conId] = state
 
-    def all(self, execution_model_name: str | None = None) -> tuple[TargetState, ...]:
-        """Return recovered direct targets, optionally restricted by owner."""
-
+    def all(
+        self, execution_model_name: str | None = None
+    ) -> tuple[ContractTarget, ...]:
+        """Return accepted contract targets, optionally restricted by owner."""
         return tuple(
-            state
+            state.target
             for state in self._items.values()
-            if execution_model_name is None
-            or state.execution_model_name == execution_model_name
+            if not state.cleared
+            and (
+                execution_model_name is None
+                or state.target.execution_model_name == execution_model_name
+            )
         )

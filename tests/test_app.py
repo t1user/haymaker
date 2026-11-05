@@ -425,7 +425,7 @@ async def test_live_runtime_stop_cancels_timeouts_before_broker_work_suspension(
 async def test_live_runtime_close_warns_about_active_target_adjustments(
     caplog,
 ) -> None:
-    """Final process close should expose unfinished direct execution work."""
+    """Final process close should expose unfinished contract execution work."""
 
     events: list[object] = []
     info = SimpleNamespace(

@@ -1,4 +1,6 @@
-"""Tests for the built-in one-to-one signal processors."""
+"""Tests for the built-in signal execution signal processors."""
+
+from runtime_helpers import signal_execution_state
 
 from datetime import datetime, timezone
 from itertools import product
@@ -7,13 +9,13 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.base import Atom
-from haymaker.book import OrderInfo, PositionState
+from haymaker.book import OrderInfo
 from haymaker.components import (
     BinaryEntryExitSignalProcessor,
     BinarySignalProcessor,
     OpposingSignalPolicy,
-    PositionIntent,
-    PositionProposal,
+    TargetIntent,
+    PositionRequest,
     Signal,
     SignalPair,
     SignalType,
@@ -30,7 +32,7 @@ def signal(
     metadata=None,
 ) -> Signal:
     return Signal(
-        source_key="alpha",
+        signal_key="alpha",
         contract=contract(),
         value=value,
         signal_type=signal_type,
@@ -50,21 +52,21 @@ def capture(processor):
 
 
 def set_position(atom_runtime, quantity, *, blocked_direction=None):
-    atom_runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    atom_runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=quantity,
+            filled_quantity=quantity,
             blocked_direction=blocked_direction,
         )
     )
 
 
-def outcome(proposal):
-    if proposal is None:
+def outcome(request):
+    if request is None:
         return None
-    return proposal.target_direction, proposal.intent
+    return request.target_direction, request.intent
 
 
 SCALAR_EXPECTED = {
@@ -72,56 +74,56 @@ SCALAR_EXPECTED = {
         OpposingSignalPolicy.CLOSE: {
             -1: {
                 -1: None,
-                0: (0, PositionIntent.CLOSE),
-                1: (0, PositionIntent.CLOSE),
+                0: (0, TargetIntent.CLOSE),
+                1: (0, TargetIntent.CLOSE),
             },
             0: {
-                -1: (-1, PositionIntent.OPEN),
+                -1: (-1, TargetIntent.OPEN),
                 0: None,
-                1: (1, PositionIntent.OPEN),
+                1: (1, TargetIntent.OPEN),
             },
             1: {
-                -1: (0, PositionIntent.CLOSE),
-                0: (0, PositionIntent.CLOSE),
+                -1: (0, TargetIntent.CLOSE),
+                0: (0, TargetIntent.CLOSE),
                 1: None,
             },
         },
         OpposingSignalPolicy.REVERSE: {
             -1: {
                 -1: None,
-                0: (0, PositionIntent.CLOSE),
-                1: (1, PositionIntent.REVERSE),
+                0: (0, TargetIntent.CLOSE),
+                1: (1, TargetIntent.REVERSE),
             },
             0: {
-                -1: (-1, PositionIntent.OPEN),
+                -1: (-1, TargetIntent.OPEN),
                 0: None,
-                1: (1, PositionIntent.OPEN),
+                1: (1, TargetIntent.OPEN),
             },
             1: {
-                -1: (-1, PositionIntent.REVERSE),
-                0: (0, PositionIntent.CLOSE),
+                -1: (-1, TargetIntent.REVERSE),
+                0: (0, TargetIntent.CLOSE),
                 1: None,
             },
         },
     },
     SignalType.EVENT: {
         OpposingSignalPolicy.CLOSE: {
-            -1: {-1: None, 0: None, 1: (0, PositionIntent.CLOSE)},
+            -1: {-1: None, 0: None, 1: (0, TargetIntent.CLOSE)},
             0: {
-                -1: (-1, PositionIntent.OPEN),
+                -1: (-1, TargetIntent.OPEN),
                 0: None,
-                1: (1, PositionIntent.OPEN),
+                1: (1, TargetIntent.OPEN),
             },
-            1: {-1: (0, PositionIntent.CLOSE), 0: None, 1: None},
+            1: {-1: (0, TargetIntent.CLOSE), 0: None, 1: None},
         },
         OpposingSignalPolicy.REVERSE: {
-            -1: {-1: None, 0: None, 1: (1, PositionIntent.REVERSE)},
+            -1: {-1: None, 0: None, 1: (1, TargetIntent.REVERSE)},
             0: {
-                -1: (-1, PositionIntent.OPEN),
+                -1: (-1, TargetIntent.OPEN),
                 0: None,
-                1: (1, PositionIntent.OPEN),
+                1: (1, TargetIntent.OPEN),
             },
-            1: {-1: (-1, PositionIntent.REVERSE), 0: None, 1: None},
+            1: {-1: (-1, TargetIntent.REVERSE), 0: None, 1: None},
         },
     },
 }
@@ -143,39 +145,39 @@ def test_scalar_binary_processor_full_transition_matrix(
     processor = BinarySignalProcessor(opposing=opposing)
     message = signal(value, signal_type)
 
-    proposal = processor.process(message)
+    request = processor.process(message)
 
-    assert outcome(proposal) == SCALAR_EXPECTED[signal_type][opposing][current][value]
-    if proposal is not None:
-        assert proposal.signal is message
+    assert outcome(request) == SCALAR_EXPECTED[signal_type][opposing][current][value]
+    if request is not None:
+        assert request.signal is message
 
 
 PAIR_SELECTED_EXPECTED = {
     SignalType.STATE: {
         -1: {
             -1: None,
-            0: (0, PositionIntent.CLOSE),
-            1: (0, PositionIntent.CLOSE),
+            0: (0, TargetIntent.CLOSE),
+            1: (0, TargetIntent.CLOSE),
         },
         0: {
-            -1: (-1, PositionIntent.OPEN),
+            -1: (-1, TargetIntent.OPEN),
             0: None,
-            1: (1, PositionIntent.OPEN),
+            1: (1, TargetIntent.OPEN),
         },
         1: {
-            -1: (0, PositionIntent.CLOSE),
-            0: (0, PositionIntent.CLOSE),
+            -1: (0, TargetIntent.CLOSE),
+            0: (0, TargetIntent.CLOSE),
             1: None,
         },
     },
     SignalType.EVENT: {
-        -1: {-1: None, 0: None, 1: (0, PositionIntent.CLOSE)},
+        -1: {-1: None, 0: None, 1: (0, TargetIntent.CLOSE)},
         0: {
-            -1: (-1, PositionIntent.OPEN),
+            -1: (-1, TargetIntent.OPEN),
             0: None,
-            1: (1, PositionIntent.OPEN),
+            1: (1, TargetIntent.OPEN),
         },
-        1: {-1: (0, PositionIntent.CLOSE), 0: None, 1: None},
+        1: {-1: (0, TargetIntent.CLOSE), 0: None, 1: None},
     },
 }
 
@@ -195,11 +197,11 @@ def test_entry_exit_processor_full_transition_matrix(
     )
     selected = entry if current == 0 else exit
 
-    proposal = processor.process(message)
+    request = processor.process(message)
 
-    assert outcome(proposal) == PAIR_SELECTED_EXPECTED[signal_type][current][selected]
-    if proposal is not None:
-        assert proposal.signal is message
+    assert outcome(request) == PAIR_SELECTED_EXPECTED[signal_type][current][selected]
+    if request is not None:
+        assert request.signal is message
 
 
 @pytest.mark.parametrize(
@@ -218,11 +220,11 @@ def test_processors_enforce_only_matching_blocked_open(
         else SignalPair(entry=direction, exit=-direction)
     )
 
-    proposal = processor.process(signal(value))
+    request = processor.process(signal(value))
 
-    assert (proposal is None) is (blocked == direction)
-    if proposal is not None:
-        assert outcome(proposal) == (direction, PositionIntent.OPEN)
+    assert (request is None) is (blocked == direction)
+    if request is not None:
+        assert outcome(request) == (direction, TargetIntent.OPEN)
 
 
 @pytest.mark.parametrize(
@@ -237,9 +239,9 @@ def test_processors_ignore_block_when_effectively_positioned(atom_runtime, proce
     subject = processor(respect_blocked_direction=True)
     value = -1 if processor is BinarySignalProcessor else SignalPair(entry=1, exit=-1)
 
-    proposal = subject.process(signal(value))
+    request = subject.process(signal(value))
 
-    assert outcome(proposal) == (0, PositionIntent.CLOSE)
+    assert outcome(request) == (0, TargetIntent.CLOSE)
 
 
 def test_processor_uses_working_orders_in_effective_direction(atom_runtime):
@@ -264,13 +266,13 @@ def test_processor_uses_working_orders_in_effective_direction(atom_runtime):
             role="OPEN",
             submitted_at=datetime.now(timezone.utc),
             execution_model_name="brackets",
-            source_key="alpha",
+            signal_key="alpha",
         )
     )
 
-    proposal = BinarySignalProcessor().process(signal(-1))
+    request = BinarySignalProcessor().process(signal(-1))
 
-    assert outcome(proposal) == (0, PositionIntent.CLOSE)
+    assert outcome(request) == (0, TargetIntent.CLOSE)
 
 
 @pytest.mark.parametrize("value", [-2, -0.5, 0.5, 2])
@@ -301,7 +303,7 @@ def test_processors_reject_wrong_value_shape(atom_runtime):
         BinaryEntryExitSignalProcessor().process(signal(1))
 
 
-def test_on_data_emits_only_actionable_proposals(atom_runtime):
+def test_on_data_emits_only_actionable_requests(atom_runtime):
     processor = BinarySignalProcessor()
     output = capture(processor)
 
@@ -309,7 +311,7 @@ def test_on_data_emits_only_actionable_proposals(atom_runtime):
     processor.onData(signal(0))
 
     assert len(output) == 1
-    assert outcome(output[0]) == (1, PositionIntent.OPEN)
+    assert outcome(output[0]) == (1, TargetIntent.OPEN)
 
 
 def test_processor_accepts_arbitrary_atom_source(atom_runtime):

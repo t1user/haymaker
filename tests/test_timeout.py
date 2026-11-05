@@ -90,7 +90,7 @@ async def test_event_emissions_restart_inactivity_interval() -> None:
 
 @pytest.mark.asyncio
 async def test_event_timeout_fires_once_until_source_recovers() -> None:
-    """One stale episode should produce one callback and no repeated spam."""
+    """One stale interval should produce one callback and no repeated spam."""
 
     source = ev.Event()
     calls: list[str] = []
@@ -280,7 +280,7 @@ async def test_open_market_timeout_requests_one_restart_even_when_rejected(
 async def test_log_only_market_timeout_rearms_after_fresh_data(
     caplog, details: ibi.ContractDetails
 ) -> None:
-    """Log mode should report once per stale-data episode."""
+    """Log mode should report once per stale-data interval."""
 
     source = ev.Event()
     with caplog.at_level(logging.ERROR, logger="haymaker.components.timeouts"):

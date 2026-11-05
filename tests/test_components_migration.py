@@ -1,3 +1,4 @@
+from runtime_helpers import signal_execution_state
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -6,7 +7,8 @@ from runpy import run_path
 import ib_insync as ibi
 import pytest
 
-from haymaker.book import Book, PositionState
+from haymaker.book.positions import SignalExecutionState
+from haymaker.book import Book
 from haymaker.misc import decode_tree, tree
 
 _MIGRATION = run_path(
@@ -73,7 +75,7 @@ def legacy_trade():
 
 
 @pytest.mark.parametrize("checkpoint", [None, [], ["exec-1"]])
-def test_conversion_preserves_or_establishes_source_fill_checkpoint(
+def test_conversion_preserves_or_establishes_signal_fill_checkpoint(
     checkpoint, order_saver, state_saver
 ):
     """Only old uncheckpointed snapshots establish an operator-reviewed baseline."""
@@ -82,16 +84,16 @@ def test_conversion_preserves_or_establishes_source_fill_checkpoint(
         {"strategy": "alpha", "action": "OPEN", "trade": tree(trade)},
         source_database="old",
     )
-    state = PositionState(
-        source_key="alpha",
+    state = signal_execution_state(
+        signal_key="alpha",
         execution_model_name="legacy:alpha",
         contract=trade.contract,
-        quantity=0,
+        filled_quantity=0,
     ).encode()
     if checkpoint is None:
         state.pop("applied_fill_keys")
         with pytest.raises(ValueError, match="fill checkpoint"):
-            PositionState.decode(state)
+            SignalExecutionState.decode(state)
     else:
         state["applied_fill_keys"] = checkpoint
     converted = convert_component_states([state], [order], source_database="old")[0]
@@ -106,7 +108,7 @@ def test_conversion_preserves_or_establishes_source_fill_checkpoint(
         save_async=False,
         restore=True,
     )
-    assert recovered.positions.for_source("alpha").quantity == (
+    assert recovered.positions._for_signal("alpha").filled_quantity == (
         1 if checkpoint == [] else 0
     )
 
@@ -132,7 +134,7 @@ def test_order_conversion_preserves_trade_fill_and_identifiers():
             "strategy": "alpha",
             "action": "OPEN",
             "trade": tree(trade),
-            "params": {"position_id": "episode"},
+            "params": {"position_id": "position"},
             "active": False,
         },
         source_database="legacy",
@@ -141,14 +143,14 @@ def test_order_conversion_preserves_trade_fill_and_identifiers():
     assert converted["orderId"] == 7
     assert converted["clientId"] == 2
     assert converted["permId"] == 99
-    assert converted["source_key"] == "alpha"
-    assert converted["position_id"] == "episode"
+    assert converted["signal_key"] == "alpha"
+    assert converted["position_id"] == "position"
     assert converted["params"]["legacy_action"] == "OPEN"
     assert converted["fills"][0]["deduplication_key"] == "exec-1"
     assert converted["migration_version"] == MIGRATION_VERSION
 
 
-def test_direct_adjustment_conversion_supplies_current_target_identity():
+def test_contract_adjustment_conversion_supplies_current_target_identity():
     trade = legacy_trade()
 
     converted = convert_order(
@@ -162,7 +164,7 @@ def test_direct_adjustment_conversion_supplies_current_target_identity():
 
     assert "target_key" not in converted
     assert decode_tree(converted["trade"]).contract.conId == trade.contract.conId
-    assert converted["source_key"] is None
+    assert converted["signal_key"] is None
     assert converted["position_id"] is None
 
 
@@ -177,7 +179,7 @@ def test_order_conversion_refuses_invented_submission_timestamp():
         )
 
 
-def test_latest_strategy_conversion_preserves_episode_and_lock():
+def test_latest_strategy_conversion_preserves_position_and_lock():
     timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
     states = convert_latest_strategy_snapshot(
         {
@@ -188,7 +190,7 @@ def test_latest_strategy_conversion_preserves_episode_and_lock():
                     "active_contract": ibi.Future(conId=1, symbol="ES", exchange="CME"),
                     "position": 0,
                     "lock": -1,
-                    "position_id": "episode",
+                    "position_id": "position",
                     "params": {
                         "open": {"atr": 5},
                         "unrelated": "ignored",
@@ -200,11 +202,11 @@ def test_latest_strategy_conversion_preserves_episode_and_lock():
         source_database="legacy",
     )
 
-    assert states[0]["state_type"] == "position"
-    assert states[0]["source_key"] == "alpha"
-    assert states[0]["position_id"] == "episode"
+    assert states[0]["state_type"] == "signal_execution"
+    assert states[0]["signal_key"] == "alpha"
+    assert states[0]["position_id"] == "position"
     assert states[0]["blocked_direction"] == -1
-    assert states[0]["bracket_inputs"] == {"atr": 5}
+    assert states[0]["protection_inputs"] == {"atr": 5}
 
 
 def test_component_conversion_rebuilds_derived_balances_in_book():
@@ -251,7 +253,7 @@ def test_latest_strategy_conversion_recovers_custom_bracket_field():
         source_database="legacy",
     )
 
-    assert states[0]["bracket_inputs"] == {"custom_volatility": 7}
+    assert states[0]["protection_inputs"] == {"custom_volatility": 7}
 
 
 def test_blotter_conversion_and_validation_totals():
@@ -260,7 +262,7 @@ def test_blotter_conversion_and_validation_totals():
             "_id": "row",
             "strategy": "alpha",
             "action": "CLOSE",
-            "position_id": "episode",
+            "position_id": "position",
             "order_id": 7,
             "commission": 1.5,
             "realizedPNL": 10,
@@ -273,7 +275,7 @@ def test_blotter_conversion_and_validation_totals():
         [converted],
     )
 
-    assert converted["source_key"] == "alpha"
+    assert converted["signal_key"] == "alpha"
     assert converted["role"] == "CLOSE"
     assert report["totals"] == {"commission": 1.5, "realized_pnl": 10}
     assert report["unmatched_blotter_order_ids"] == []
@@ -350,7 +352,7 @@ def migration_client():
                 "strategy": "alpha",
                 "action": "OPEN",
                 "trade": tree(legacy_trade()),
-                "params": {"position_id": "episode"},
+                "params": {"position_id": "position"},
             }
         ]
     )
@@ -360,7 +362,7 @@ def migration_client():
     stop.order.action = "SELL"
     stop.order.orderType = "STP"
     stop.order.auxPrice = 95
-    stop.order.ocaGroup = "episode-brackets"
+    stop.order.ocaGroup = "position-brackets"
     stop.order.ocaType = 2
     stop.orderStatus = ibi.OrderStatus(orderId=8, status="Submitted", remaining=1)
     stop.fills = []
@@ -371,7 +373,7 @@ def migration_client():
             "action": "STOP-LOSS",
             "trade": tree(stop),
             "params": {
-                "position_id": "episode",
+                "position_id": "position",
                 "vol_field_name": "atr",
                 "vol_field_value": 5,
             },
@@ -388,7 +390,7 @@ def migration_client():
                             conId=1, symbol="ES", exchange="CME"
                         ),
                         "position": 1,
-                        "position_id": "episode",
+                        "position_id": "position",
                         "timestamp": timestamp,
                     }
                 ),
@@ -401,7 +403,7 @@ def migration_client():
                 "_id": "row",
                 "strategy": "alpha",
                 "action": "OPEN",
-                "position_id": "episode",
+                "position_id": "position",
                 "order_id": 7,
                 "commission": 1,
                 "realizedPNL": 2,
@@ -454,7 +456,7 @@ def test_migration_apply_is_idempotent_and_reports_target_counts():
 
     assert first["target_counts"] == {
         "orders": 2,
-        "state": 1,
+        "state": 2,
         "blotter": 1,
     }
     assert second["target_counts"] == first["target_counts"]
@@ -472,7 +474,7 @@ def test_migration_refuses_mixed_or_foreign_target_database():
         )
 
 
-def component_order(*, source_key=None, target_key=None):
+def component_order(*, signal_key=None, target_key=None):
     """Build old component evidence with explicit fills absent from Trade.fills."""
     from haymaker.book import FillRecord, OrderInfo
 
@@ -481,9 +483,9 @@ def component_order(*, source_key=None, target_key=None):
     trade.fills.clear()
     document = OrderInfo(
         trade=trade,
-        role="OPEN" if source_key else "TARGET_ADJUSTMENT",
-        source_key=source_key,
-        position_id="episode" if source_key else None,
+        role="OPEN" if signal_key else "TARGET_ADJUSTMENT",
+        signal_key=signal_key,
+        position_id="position" if signal_key else None,
         execution_model_name="model",
         submitted_at=trade.log[0].time,
         params={"atr": 5},
@@ -495,10 +497,10 @@ def component_order(*, source_key=None, target_key=None):
 
 
 def keyed_target(con_id=1, key="old-key"):
-    """Represent the old logical-key direct state."""
-    from haymaker.book import TargetState
+    """Represent the old logical-key contract state."""
+    from haymaker.book import ContractTarget
 
-    document = TargetState(
+    document = ContractTarget(
         contract=ibi.Future("ES", conId=con_id, exchange="CME"),
         execution_model_name="model",
         target_quantity=1,
@@ -528,38 +530,38 @@ def test_component_order_keeps_authoritative_fills_and_commissions():
 
 def test_component_state_separates_held_and_pending_contract_and_inputs():
     """The overwritten old target Contract cannot be mistaken for the holding."""
-    from haymaker.book import PositionState
+    from haymaker.book.positions import SignalExecutionState
 
     incoming = ibi.Future("ES", conId=2, exchange="CME")
-    state = PositionState(
-        source_key="alpha",
+    state = signal_execution_state(
+        signal_key="alpha",
         execution_model_name="model",
         contract=incoming,
-        quantity=1,
+        filled_quantity=1,
         target_quantity=-1,
         target_created_at=datetime.now(timezone.utc),
-        position_id="episode",
-        bracket_inputs={"atr": 9},
+        position_id="position",
+        protection_inputs={"atr": 9},
     ).encode()
     del state["target_contract"]
-    del state["target_bracket_inputs"]
+    del state["target_protection_inputs"]
     result = convert_component_states(
-        [state], [component_order(source_key="alpha")], source_database="old"
+        [state], [component_order(signal_key="alpha")], source_database="old"
     )[0]
-    restored = PositionState.decode(result)
+    restored = SignalExecutionState.decode(result)
     assert restored.contract.conId == 1
     assert restored.target_contract == incoming
-    assert restored.bracket_inputs == {"atr": 5}
-    assert restored.target_bracket_inputs == {"atr": 9}
+    assert restored.protection_inputs == {"atr": 5}
+    assert restored.target_protection_inputs == {"atr": 9}
 
 
-def test_keyed_direct_state_converts_only_unambiguous_concrete_ownership():
+def test_keyed_contract_state_converts_only_unambiguous_concrete_ownership():
     """Do not invent allocation between an old holding and a different target."""
     orders = [component_order(target_key="old-key")]
     converted = convert_component_states(
         [keyed_target()], orders, source_database="old"
     )[0]
-    assert converted["state_key"] == "target:1"
+    assert converted["state_key"] == "contract_execution:1"
     assert "target_key" not in converted
     with pytest.raises(ValueError, match="Ambiguous concrete allocation"):
         convert_component_states(
@@ -598,7 +600,7 @@ def test_component_conversion_apply_is_idempotent_and_source_is_unchanged():
     assert (
         first["target_counts"]
         == second["target_counts"]
-        == {"orders": 1, "state": 1, "blotter": 0}
+        == {"orders": 1, "state": 2, "blotter": 0}
     )
     assert (orders, states) == original
 
@@ -632,7 +634,7 @@ def test_models_collection_copy_preserves_source_and_restores_existing_protectio
     client["legacy"]["models"] = client["legacy"]["strategies"]
     del client["legacy"].collections["strategies"]
     snapshot = client["legacy"]["models"].documents[0]
-    snapshot["alpha"]["params"] = {"open": {"range": 17, "position_id": "episode"}}
+    snapshot["alpha"]["params"] = {"open": {"range": 17, "position_id": "position"}}
     snapshot["locked"] = {"position": 0, "lock": -1, "timestamp": snapshot["timestamp"]}
     original = deepcopy(
         {name: col.documents for name, col in client["legacy"].collections.items()}
@@ -656,7 +658,10 @@ def test_models_collection_copy_preserves_source_and_restores_existing_protectio
         order_saver.save(document)
     for document in client["fresh"]["state"].documents:
         state_saver.save(document)
-        assert document["source_collection"] == "models"
+        if document["state_type"] == "signal_execution":
+            assert document["source_collection"] == "models"
+        else:
+            assert document["source_collection"] == "state"
     book = Book(
         order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
     )
@@ -672,7 +677,7 @@ def test_models_collection_copy_preserves_source_and_restores_existing_protectio
         "alpha", name="legacy:alpha", stop=TrailingStop(1, vol_field="range")
     )
     model.recover()
-    assert book.positions.for_source("alpha").bracket_inputs["range"] == 17
+    assert book.positions._for_signal("alpha").protection_inputs["range"] == 17
     assert book.positions.blocked_direction("locked") == -1
     assert not book.apply_fill(book.orders.by_id(7).trade, legacy_trade().fills[0])
     stop = book.orders.by_id(8).trade
@@ -695,13 +700,13 @@ def test_models_collection_copy_preserves_source_and_restores_existing_protectio
     )
     stop.fills.append(fill)
     assert book.apply_fill(stop, fill)
-    assert book.positions.quantity(stop.contract) == 0
+    assert book.positions.filled_quantity(stop.contract) == 0
     assert book.positions.blocked_direction("alpha") == 1
     assert not book.apply_fill(stop, fill)
     recovered = Book(
         order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
     )
-    assert recovered.positions.quantity(stop.contract) == 0
+    assert recovered.positions.filled_quantity(stop.contract) == 0
     assert recovered.positions.blocked_direction("alpha") == 1
 
 
@@ -748,11 +753,11 @@ def test_legacy_accounted_keys_survive_missing_trade_fill_history(
     old_fill.commissionReport.execId = "older-fill"
     assert book.apply_fill(book.orders.by_id(7).trade, old_fill)
     assert len(book.orders.by_id(7).fills) == 2
-    assert book.positions.quantity(old_fill.contract) == 1
+    assert book.positions.filled_quantity(old_fill.contract) == 1
     restored = Book(
         order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
     )
-    assert restored.positions.quantity(old_fill.contract) == 1
+    assert restored.positions.filled_quantity(old_fill.contract) == 1
 
 
 def test_apply_requires_explicit_stopped_source_and_distinct_databases():
@@ -815,8 +820,8 @@ def test_corrected_snapshot_remains_authoritative_over_historical_fills():
     stop.orderStatus.status = ibi.OrderStatus.Cancelled
     client["legacy"]["orders"].documents[1]["trade"] = tree(stop)
     report = migrate(client, source_database="legacy", target_database="fresh")
-    state = report["book_restoration"]["sources"]["alpha"]
-    assert state["quantity"] == 0
+    state = report["book_restoration"]["signals"]["alpha"]
+    assert state["filled_quantity"] == 0
     assert state["target_quantity"] == 0
     assert state["blocked_direction"] == 1
 
@@ -846,7 +851,7 @@ def test_duplicate_identities_do_not_overwrite_evidence(collision):
     assert client["fresh"]["orders"].documents == []
 
 
-@pytest.mark.parametrize("problem", ["absent", "quantity", "episode", "active_flag"])
+@pytest.mark.parametrize("problem", ["absent", "quantity", "position", "active_flag"])
 def test_inconsistent_protection_is_refused(problem):
     client = migration_client()
     document = client["legacy"]["orders"].documents[1]
@@ -855,8 +860,8 @@ def test_inconsistent_protection_is_refused(problem):
         trade.orderStatus.status = ibi.OrderStatus.Cancelled
     elif problem == "quantity":
         trade.order.totalQuantity = 2
-    elif problem == "episode":
-        document["params"]["position_id"] = "wrong-episode"
+    elif problem == "position":
+        document["params"]["position_id"] = "wrong-position"
     else:
         document["active"] = False
     document["trade"] = tree(trade)
@@ -872,7 +877,7 @@ def test_inconsistent_protection_is_refused(problem):
 
 
 @pytest.mark.parametrize("evidence", ["fills", "accounting_keys"])
-def test_missing_source_cannot_resurrect_historical_positions(evidence):
+def test_missing_signal_cannot_resurrect_historical_positions(evidence):
     client = migration_client()
     if evidence == "accounting_keys":
         document = client["legacy"]["orders"].documents[0]
@@ -882,7 +887,7 @@ def test_missing_source_cannot_resurrect_historical_positions(evidence):
         document["accounted_exec_ids"] = ["exec-1"]
         client["legacy"]["orders"].documents.pop()
     del client["legacy"]["strategies"].documents[0]["alpha"]
-    with pytest.raises(ValueError, match="Missing legacy snapshot source"):
+    with pytest.raises(ValueError, match="Missing legacy snapshot signal"):
         migrate(
             client,
             source_database="legacy",
@@ -987,7 +992,7 @@ def test_interrupted_target_can_resume_identical_source(monkeypatch):
         apply=True,
     )
     assert report["target_verified"]
-    assert report["target_counts"] == {"orders": 2, "state": 1, "blotter": 1}
+    assert report["target_counts"] == {"orders": 2, "state": 2, "blotter": 1}
 
 
 def test_migration_indexes_allow_subsequent_runtime_writes():
@@ -1029,8 +1034,8 @@ def test_migration_indexes_allow_subsequent_runtime_writes():
         save_async=False,
     )
     for source in ("new-a", "new-b"):
-        book.update_position(
-            PositionState(source_key=source, execution_model_name="new")
+        book._update_signal_state(
+            signal_execution_state(signal_key=source, execution_model_name="new")
         )
     for order_id in (20, 21):
         client["fresh"]["orders"].insert_one({"orderId": order_id})

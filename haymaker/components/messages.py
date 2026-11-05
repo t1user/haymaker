@@ -31,7 +31,7 @@ def utc_now() -> datetime:
 class SignalType(StrEnum):
     """Declare state-replacement or event-occurrence Signal semantics.
 
-    ``STATE`` replaces a source's prior desired state. Every ``EVENT`` is a new
+    ``STATE`` replaces a signal's prior desired state. Every ``EVENT`` is a new
     event; repetition does not merely reaffirm earlier state.
     """
 
@@ -39,10 +39,10 @@ class SignalType(StrEnum):
     EVENT = "EVENT"
 
 
-class PositionIntent(StrEnum):
-    """Assert the initial transition for a one-to-one position target.
+class TargetIntent(StrEnum):
+    """Assert the initial transition for a signal execution position target.
 
-    Intent is mandatory on PositionProposal and optional on general
+    Intent is mandatory on PositionRequest and optional on general
     PositionTarget. It does not replace the target's authoritative quantity.
     """
 
@@ -87,14 +87,14 @@ class SignalPair:
     """Carry distinct entry and exit values in one Signal.
 
     Use this value with :class:`BinaryEntryExitSignalProcessor` when a
-    one-to-one strategy calculates separate entry and exit conditions for the
+    signal execution strategy calculates separate entry and exit conditions for the
     same observation. Both values must be finite numbers; the receiving
     processor may impose narrower constraints such as ``-1``, ``0``, and
     ``1``.
 
     Args:
-        entry: Value consulted while the source is effectively flat.
-        exit: Value consulted while the source has an effective position.
+        entry: Value consulted while the signal is effectively flat.
+        exit: Value consulted while the signal has an effective position.
 
     Raises:
         TypeError: If either value is not a real number.
@@ -114,7 +114,7 @@ class Signal:
     """Represent one structured trading input.
 
     Args:
-        source_key: Stable opaque identity of the logical input path.
+        signal_key: Stable opaque identity of the logical input path.
         contract: Contract to which the signal applies.
         value: Finite scalar value or an entry/exit pair. Consumers decide
             which value shapes they support.
@@ -135,7 +135,7 @@ class Signal:
         unhashable.
     """
 
-    source_key: str
+    signal_key: str
     contract: ibi.Contract
     value: float | SignalPair
     signal_type: SignalType
@@ -146,7 +146,7 @@ class Signal:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "source_key", non_empty_string(self.source_key, "source_key")
+            self, "signal_key", non_empty_string(self.signal_key, "signal_key")
         )
         object.__setattr__(self, "contract", ib_contract(self.contract))
         if not isinstance(self.value, SignalPair):
@@ -163,27 +163,27 @@ class Signal:
 
 
 @dataclass(frozen=True, kw_only=True)
-class PositionProposal:
-    """Carry one signal processor's one-to-one position decision.
+class PositionRequest:
+    """Carry one signal processor's signal execution position decision.
 
     Args:
         signal: Original frozen signal envelope.
         target_direction: Desired short, flat, or long direction.
-        intent: Mandatory episode transition asserted at this boundary.
-        created_at: Time at which the proposal was created.
+        intent: Mandatory position transition asserted at this boundary.
+        created_at: Time at which the request was created.
 
     Raises:
         TypeError: If ``signal`` or ``intent`` has the wrong type.
         ValueError: If the direction or timestamp is invalid.
 
     Note:
-        PositionProposal is intentionally unhashable because it preserves its
+        PositionRequest is intentionally unhashable because it preserves its
         unhashable Signal.
     """
 
     signal: Signal
     target_direction: Literal[-1, 0, 1]
-    intent: PositionIntent
+    intent: TargetIntent
     created_at: datetime = field(default_factory=utc_now)
     __hash__: ClassVar[Any] = None
 
@@ -197,8 +197,8 @@ class PositionProposal:
         if self.target_direction not in (-1, 0, 1):
             raise ValueError("target_direction must be -1, 0, or 1")
         object.__setattr__(self, "target_direction", int(self.target_direction))
-        if not isinstance(self.intent, PositionIntent):
-            raise TypeError("intent must be a PositionIntent")
+        if not isinstance(self.intent, TargetIntent):
+            raise TypeError("intent must be a TargetIntent")
         object.__setattr__(
             self, "created_at", aware_datetime(self.created_at, "created_at")
         )
@@ -212,8 +212,8 @@ class PositionTarget:
         contract: Concrete execution Contract with a non-zero ``conId``.
         target_quantity: Absolute signed quantity desired after convergence.
         created_at: Time at which this target superseded an earlier target.
-        source_key: Optional one-to-one input identity.
-        intent: Optional initial one-to-one lifecycle assertion. The numeric
+        signal_key: Optional signal execution input identity.
+        intent: Optional initial signal execution lifecycle assertion. The numeric
             target remains authoritative after acceptance.
         metadata: Optional execution inputs or audit references. The mapping is
             copied and its top level is exposed read-only.
@@ -228,17 +228,17 @@ class PositionTarget:
         copied by consumers that need to modify them. PositionTarget is
         intentionally unhashable.
 
-        Direct execution adjusts this exact Contract. One-to-one execution
-        instead identifies an episode by source_key: OPEN uses this Contract,
+        Contract execution adjusts this exact Contract. Signal execution execution
+        instead identifies a position by signal_key: OPEN uses this Contract,
         CLOSE uses Book's held Contract, and REVERSE closes the held Contract
-        before opening this one. No user-defined direct execution key is needed.
+        before opening this one. No user-defined contract execution key is needed.
     """
 
     contract: ibi.Contract
     target_quantity: float
     created_at: datetime = field(default_factory=utc_now)
-    source_key: str | None = None
-    intent: PositionIntent | None = None
+    signal_key: str | None = None
+    intent: TargetIntent | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     __hash__: ClassVar[Any] = None
 
@@ -252,22 +252,22 @@ class PositionTarget:
         object.__setattr__(
             self, "created_at", aware_datetime(self.created_at, "created_at")
         )
-        if self.source_key is not None:
+        if self.signal_key is not None:
             object.__setattr__(
                 self,
-                "source_key",
-                non_empty_string(self.source_key, "source_key"),
+                "signal_key",
+                non_empty_string(self.signal_key, "signal_key"),
             )
-        if self.intent is not None and not isinstance(self.intent, PositionIntent):
-            raise TypeError("intent must be None or a PositionIntent")
+        if self.intent is not None and not isinstance(self.intent, TargetIntent):
+            raise TypeError("intent must be None or a TargetIntent")
         object.__setattr__(
             self, "metadata", readonly_mapping(self.metadata, "metadata")
         )
 
 
 __all__ = [
-    "PositionIntent",
-    "PositionProposal",
+    "TargetIntent",
+    "PositionRequest",
     "PositionTarget",
     "Signal",
     "SignalPair",

@@ -403,7 +403,9 @@ class SimulatedIB:
                 if resolved is not None:
                     qualified.append(resolved)
             elif len(details) > 1:
-                raise BacktestBrokerError(f"Ambiguous contract blueprint: {contract}")
+                raise BacktestBrokerError(
+                    f"Ambiguous contract specification: {contract}"
+                )
         return qualified
 
     def qualifyContracts(self, *contracts: ibi.Contract) -> list[ibi.Contract]:
@@ -425,7 +427,9 @@ class SimulatedIB:
             if len(matches) == 1:
                 qualified.append(matches[0])
             elif len(matches) > 1:
-                raise BacktestBrokerError(f"Ambiguous contract blueprint: {contract}")
+                raise BacktestBrokerError(
+                    f"Ambiguous contract specification: {contract}"
+                )
         return qualified
 
     def placeOrder(self, contract: ibi.Contract, order: ibi.Order) -> ibi.Trade:
@@ -967,13 +971,13 @@ def _finite_order_price(value: Any, name: str) -> float:
     return result
 
 
-def _contract_matches(blueprint: ibi.Contract, contract: ibi.Contract) -> bool:
-    """Return whether every specified blueprint identity field matches."""
+def _contract_matches(contract_spec: ibi.Contract, contract: ibi.Contract) -> bool:
+    """Return whether every specified contract_spec identity field matches."""
 
-    if blueprint.conId:
-        return blueprint.conId == contract.conId
-    fields = ibi.util.dataclassNonDefaults(blueprint)
-    if blueprint.secType == "CONTFUT":
+    if contract_spec.conId:
+        return contract_spec.conId == contract.conId
+    fields = ibi.util.dataclassNonDefaults(contract_spec)
+    if contract_spec.secType == "CONTFUT":
         if contract.secType != "FUT":
             return False
         fields = {

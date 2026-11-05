@@ -7,6 +7,7 @@ from typing import Any
 from ..misc import tree, decode_tree
 from ..validators import non_empty_string, readonly_mapping
 from ..saver import AbstractBaseSaver
+from .schema import require_schema
 from .persistence import PersistenceWriter, utc_now
 
 
@@ -21,6 +22,7 @@ class PortfolioStateStore:
 
     def _restore(self, document: Mapping[str, Any]) -> None:
         """Restore one opaque mapping under its validated natural key."""
+        require_schema(document)
         key = non_empty_string(document["portfolio_key"], "portfolio_key")
         self._items[key] = readonly_mapping(
             decode_tree(document.get("state", {})), "state"
@@ -32,6 +34,7 @@ class PortfolioStateStore:
             self._writer.save(
                 self._saver,
                 {
+                    "schema_version": 1,
                     "state_key": f"portfolio:{key}",
                     "state_type": "portfolio",
                     "portfolio_key": key,
@@ -49,6 +52,7 @@ class PortfolioStateStore:
         self._writer.save(
             self._saver,
             {
+                "schema_version": 1,
                 "state_key": f"portfolio:{portfolio_key}",
                 "state_type": "portfolio",
                 "portfolio_key": portfolio_key,

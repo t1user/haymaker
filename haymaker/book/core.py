@@ -16,12 +16,21 @@ from typing import Any, Literal
 
 import ib_insync as ibi
 
+from ..enums import ExecutionMode
 from ..blotter import Blotter
 from ..saver import AbstractBaseSaver, MongoSaver
 from .orders import OrderInfo, FillRecord, OrderStore, _execution_key, fill_direction
-from .positions import PositionState, PositionStore
-from .targets import TargetState, TargetStore
-from .rolls import RollState, RollStore, FutureRollMode, FutureRollStage
+from .positions import (
+    SignalExecutionState,
+    SignalPosition,
+    SignalTarget,
+    PositionStore,
+    ProtectionStore,
+    ProtectionState,
+)
+from .schema import require_schema
+from .targets import ContractTarget, TargetStore
+from .rolls import RollState, RollStore, FutureRollStage
 from .portfolio import PortfolioStateStore
 from .persistence import (
     DEFAULT_ORDER_COLLECTION_NAME,
@@ -51,8 +60,9 @@ class Book:
 
     Attributes:
         orders: Order queries and execution attribution.
-        positions: Source states and shared concrete-Contract balances.
-        targets: Latest direct targets and reset cutoffs.
+        positions: Signal and concrete-contract filled positions.
+        targets: Accepted signal and contract targets.
+        protection: Saved inputs for each current signal position.
         rolls: Durable futures-roll checkpoints.
         portfolios: Opaque custom Portfolio recovery mappings.
         blotter: Optional trade reporting service.
@@ -78,7 +88,8 @@ class Book:
         self._writer = PersistenceWriter()
         self.orders = OrderStore(order_saver, self._writer)
         self.positions = PositionStore(state_saver, self._writer)
-        self.targets = TargetStore(state_saver, self._writer)
+        self.targets = TargetStore(state_saver, self._writer, self.positions)
+        self.protection = ProtectionStore(self.positions)
         self.rolls = RollStore(state_saver, self._writer)
         self.portfolios = PortfolioStateStore(state_saver, self._writer)
         self.blotter = blotter
@@ -86,7 +97,7 @@ class Book:
         if restore:
             self._restore_documents(order_saver.read({}), state_saver.read({}))
             self._recover_position_fills()
-            self._repair_balances()
+            self._repair_contract_positions()
         if save_async:
             self._writer.enable_async()
 
@@ -104,11 +115,13 @@ class Book:
         state_documents: Sequence[Mapping[str, Any]],
     ) -> None:
         """Dispatch each physical document once, before cross-state verification."""
+        for document in (*order_documents, *state_documents):
+            require_schema(document)
         self.orders._restore(order_documents)
         loaders: dict[str, Callable[[Mapping[str, Any]], None]] = {
-            "position": self.positions._restore_source,
-            "balance": self.positions._restore_balance,
-            "target": self.targets._restore,
+            "signal_execution": self.positions._restore_signal,
+            "contract_position": self.positions._restore_contract_position,
+            "contract_execution": self.targets._restore,
             "roll": self.rolls._restore,
             "portfolio": self.portfolios._restore,
         }
@@ -127,14 +140,14 @@ class Book:
         self.targets._clear(contracts, cleared_at)
         self.rolls._clear(cleared_at)
         self.portfolios._clear(cleared_at)
-        self._repair_balances()
+        self._repair_contract_positions()
 
-    def _repair_balances(self) -> None:
-        """Verify shared balances after loading/reset, never during a query."""
-        for balance in self.positions._rebuild(
+    def _repair_contract_positions(self) -> None:
+        """Verify shared contract positions after loading/reset, never during a query."""
+        for contract_position in self.positions._rebuild(
             self.orders.query(), self.rolls.all(), self.targets.cutoffs
         ):
-            self.positions._put_balance(balance)
+            self.positions._put_contract_position(contract_position)
 
     def save_order(self, info: OrderInfo) -> OrderInfo:
         """Save order evidence before replacing its physical position contribution."""
@@ -144,7 +157,7 @@ class Book:
                 info, self.targets.cutoffs
             )
         }
-        for roll in self.rolls.active_bracket():
+        for roll in self.rolls.active_signal():
             if info.params.get("roll_state_key") == roll.series_key:
                 changes[("roll", roll.series_key)] = dict(
                     self.positions._roll_contribution(
@@ -180,32 +193,93 @@ class Book:
             info.trade.orderStatus.status = ibi.OrderStatus.Cancelled
             self.save_order(info)
 
-    def update_position(self, state: PositionState) -> PositionState:
-        """Record authoritative source state and update its shared net contribution."""
+    def update_position(self, position: SignalPosition) -> SignalPosition:
+        """Update filled exposure while preserving its target and protection."""
+        current = self.positions._for_signal(position.signal_key)
+        if current is None:
+            state = SignalExecutionState(
+                position=position,
+                protection=ProtectionState(
+                    signal_key=position.signal_key, position_id=position.position_id
+                ),
+            )
+        else:
+            state = replace(
+                current,
+                position=position,
+                protection=replace(
+                    current.protection, position_id=position.position_id
+                ),
+            )
+        return self._update_signal_state(state).position
+
+    def update_signal_target(self, target: SignalTarget) -> SignalTarget:
+        """Accept a signal setpoint without changing the held position inputs."""
+        current = self.positions._for_signal(target.signal_key)
+        if current is not None:
+            if (
+                current.target_created_at is not None
+                and target.target_created_at is not None
+                and target.target_created_at < current.target_created_at
+            ):
+                assert current.target is not None
+                return current.target
+            state = replace(
+                current,
+                target=target,
+                position=replace(
+                    current.position,
+                    execution_model_name=target.execution_model_name,
+                    updated_at=utc_now(),
+                ),
+            )
+        else:
+            state = SignalExecutionState(
+                target=target,
+                position=SignalPosition(
+                    signal_key=target.signal_key,
+                    execution_model_name=target.execution_model_name,
+                ),
+                protection=ProtectionState(
+                    signal_key=target.signal_key, position_id=None
+                ),
+            )
+        self._update_signal_state(state)
+        return target
+
+    def correct_signal_position(
+        self, signal_key: str, filled_quantity: float, corrected_at: datetime
+    ) -> SignalPosition:
+        """Align filled and desired exposure, preserving blocks and checkpoints."""
+        state = self.positions._for_signal(signal_key)
+        if state is None:
+            raise KeyError(signal_key)
+        return self._update_signal_state(
+            state.corrected(filled_quantity, corrected_at)
+        ).position
+
+    def _update_signal_state(self, state: SignalExecutionState) -> SignalExecutionState:
+        """Record authoritative signal state and update its shared net contribution."""
         state = self.positions._checkpoint(
-            state, self.orders.received_fill_keys(state.source_key)
+            state, self.orders.received_fill_keys(state.signal_key)
         )
         return self._save_position(state)
 
-    def _save_position(self, state: PositionState) -> PositionState:
+    def _save_position(self, state: SignalExecutionState) -> SignalExecutionState:
         """Commit a checkpoint before updating the aggregate position derived from it."""
-        self.positions._put_source(state)
+        self.positions._put_signal(state)
         self.positions._replace_contributions(
             {
-                ("source", state.source_key): self.positions._episode_contribution(
+                ("signal", state.signal_key): self.positions._position_contribution(
                     state, self.rolls.all(active_only=True)
                 )
             }
         )
         return state
 
-    def update_target(self, state: TargetState) -> TargetState:
+    def update_target(self, state: ContractTarget) -> ContractTarget:
         """Accept a latest target, retaining any established accounting reset cutoff."""
-        previous_cutoff = self.targets.cutoffs.get(state.contract.conId)
-        accepted = self.targets._put(state)
-        if previous_cutoff is None and accepted.fill_evidence_start_at is not None:
-            self._repair_balances()
-        return accepted
+        return self.targets._put(state)
 
     def update_roll(self, state: RollState) -> RollState:
         """Persist a roll checkpoint and replace all affected contributions together."""
@@ -218,22 +292,22 @@ class Book:
                         state, self.orders.query(role="ROLL")
                     )
                 )
-                if state.mode is FutureRollMode.BRACKET
+                if state.mode is ExecutionMode.SIGNAL
                 and state.stage is not FutureRollStage.COMPLETE
                 else {}
             )
         }
-        sources = {
-            p.source_key
+        signals = {
+            p.signal_key
             for roll in (previous, state)
             if roll is not None
             for p in roll.participants
-            if p.source_key is not None
+            if p.signal_key is not None
         }
-        for source in sorted(sources):
-            position = self.positions.for_source(source)
-            changes[("source", source)] = (
-                self.positions._episode_contribution(
+        for signal in sorted(signals):
+            position = self.positions._for_signal(signal)
+            changes[("signal", signal)] = (
+                self.positions._position_contribution(
                     position, self.rolls.all(active_only=True)
                 )
                 if position is not None
@@ -242,14 +316,14 @@ class Book:
         self.positions._replace_contributions(changes)
         return state
 
-    def effective_quantity(self, source_key: str) -> float:
-        """Return fill-accounted quantity plus relevant working episode orders."""
+    def effective_quantity(self, signal_key: str) -> float:
+        """Return fill-accounted quantity plus relevant working position orders."""
 
-        state = self.positions.for_source(source_key)
-        quantity = state.quantity if state is not None else 0.0
+        state = self.positions._for_signal(signal_key)
+        quantity = state.filled_quantity if state is not None else 0.0
         working = sum(
             info.signed_working_quantity
-            for info in self.orders.active(source_key=source_key)
+            for info in self.orders.active(signal_key=signal_key)
             if info.role in {"OPEN", "CLOSE", "TARGET_ADJUSTMENT"}
         )
         return quantity + working
@@ -259,7 +333,7 @@ class Book:
     ) -> float:
         """Return aggregate logical quantity including matching working orders."""
 
-        return self.positions.quantity(contract) + sum(
+        return self.positions.filled_quantity(contract) + sum(
             info.signed_working_quantity
             for info in self.orders.active(
                 contract=contract,
@@ -268,46 +342,52 @@ class Book:
             if info.role in {"OPEN", "CLOSE", "TARGET_ADJUSTMENT", "ROLL"}
         )
 
-    def create_position_episode(
+    def create_signal_position(
         self,
-        source_key: str,
+        signal_key: str,
         execution_model_name: str,
         contract: ibi.Contract,
         *,
         target_quantity: float,
         target_created_at: datetime,
-        bracket_inputs: Mapping[str, Any] = MappingProxyType({}),
-    ) -> PositionState:
-        """Create and persist a fresh independently managed episode."""
+        protection_inputs: Mapping[str, Any] = MappingProxyType({}),
+    ) -> SignalPosition:
+        """Create and persist a fresh independently managed position."""
 
-        return self.update_position(
-            self.positions._new_episode(
-                source_key,
+        return self._update_signal_state(
+            self.positions._new_position(
+                signal_key,
                 execution_model_name,
                 contract,
                 target_quantity=target_quantity,
                 target_created_at=target_created_at,
-                bracket_inputs=bracket_inputs,
+                protection_inputs=protection_inputs,
             )
-        )
+        ).position
 
-    def close_position_episode(self, source_key: str) -> PositionState:
-        """Close one source episode through the shared accounting path."""
-        return self.update_position(self.positions._closed_episode(source_key))
+    def close_signal_position(self, signal_key: str) -> SignalPosition:
+        """Close one signal position through the shared accounting path."""
+        return self._update_signal_state(
+            self.positions._closed_position(signal_key)
+        ).position
 
     def update_blocked_direction(
-        self, source_key: str, direction: Literal[-1, 1] | None
-    ) -> PositionState:
-        """Persist or clear a one-to-one stop-out direction."""
+        self, signal_key: str, direction: Literal[-1, 1] | None
+    ) -> SignalPosition:
+        """Persist or clear a signal execution stop-out direction."""
 
         if isinstance(direction, bool) or direction not in (None, -1, 1):
             raise ValueError("direction must be None, -1, or 1")
-        state = self.positions.for_source(source_key)
+        state = self.positions._for_signal(signal_key)
         if state is None:
-            raise KeyError(source_key)
-        return self.update_position(
-            replace(state, blocked_direction=direction, updated_at=utc_now())
-        )
+            raise KeyError(signal_key)
+        return self._update_signal_state(
+            replace(
+                state,
+                blocked_direction=direction,
+                position=replace(state.position, updated_at=utc_now()),
+            )
+        ).position
 
     def apply_fill(self, trade: ibi.Trade, fill: ibi.Fill) -> bool:
         """Conditionally apply one unseen Fill and persist evidence first.
@@ -327,15 +407,15 @@ class Book:
         if not isinstance(trade.contract, ibi.Bag):
             fill_direction(record)
         received = (
-            self.orders.received_fill_keys(info.source_key)
-            if info.source_key and self.positions.for_source(info.source_key) is None
+            self.orders.received_fill_keys(info.signal_key)
+            if info.signal_key and self.positions._for_signal(info.signal_key) is None
             else frozenset()
         )
         new = info.add_fill(record)
         # Persist the live Trade even on a replay: its ID/status may have changed.
-        # Evidence must precede the source checkpoint and net balance.
+        # Evidence must precede the signal checkpoint and net contract position.
         self.save_order(info)
-        # A source first seen after an explicit clear starts beyond previously
+        # A signal first seen after an explicit clear starts beyond previously
         # accounted evidence. Startup repairs intentionally omit this baseline.
         state = self.positions._after_fill(info, record, initial_checkpoint=received)
         if state is not None:
@@ -344,12 +424,12 @@ class Book:
         return new
 
     def _recover_position_fills(self) -> None:
-        """Finish missing source projections without replaying checkpointed fills."""
+        """Finish missing signal projections without replaying checkpointed fills."""
         evidence = sorted(
             (
                 (record.time, info.orderId, index, info, record)
                 for info in self.orders.query()
-                if info.source_key is not None
+                if info.signal_key is not None
                 and not isinstance(info.trade.contract, ibi.Bag)
                 for index, record in enumerate(info.fills)
             ),
@@ -358,7 +438,7 @@ class Book:
         for _, _, _, info, record in evidence:
             state = self.positions._after_fill(info, record)
             if state is not None:
-                self.positions._put_source(state)
+                self.positions._put_signal(state)
 
     def update_commission(
         self,
@@ -399,16 +479,16 @@ class Book:
         return False
 
     def blotter_records(
-        self, source_key: str, position_id: str | None = None
+        self, signal_key: str, position_id: str | None = None
     ) -> tuple[Mapping[str, Any], ...]:
-        """Query available blotter rows by source and optional episode."""
+        """Query available blotter rows by signal and optional position."""
 
         if self.blotter is None:
             return ()
         return tuple(
             row
             for row in self.blotter.records()
-            if row.get("source_key") == source_key
+            if row.get("signal_key") == signal_key
             and (position_id is None or row.get("position_id") == position_id)
         )
 
@@ -424,7 +504,7 @@ class Book:
         return {
             *(
                 state.execution_model_name
-                for state in self.positions.source_states().values()
+                for state in self.positions._signal_states().values()
             ),
             *(state.execution_model_name for state in self.targets.all()),
             *(info.execution_model_name for info in self.orders.query()),

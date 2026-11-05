@@ -8,8 +8,8 @@ import ib_insync as ibi
 import pytest
 
 from haymaker.components import (
-    PositionIntent,
-    PositionProposal,
+    TargetIntent,
+    PositionRequest,
     PositionTarget,
     Signal,
     SignalPair,
@@ -24,7 +24,7 @@ def contract(con_id: int = 1) -> ibi.Future:
 
 def signal(**overrides) -> Signal:
     values: dict[str, Any] = {
-        "source_key": "alpha",
+        "signal_key": "alpha",
         "contract": contract(),
         "value": 1,
         "signal_type": SignalType.STATE,
@@ -33,14 +33,14 @@ def signal(**overrides) -> Signal:
     return Signal(**values)
 
 
-def proposal(**overrides) -> PositionProposal:
+def request(**overrides) -> PositionRequest:
     values: dict[str, Any] = {
         "signal": signal(),
         "target_direction": 1,
-        "intent": PositionIntent.OPEN,
+        "intent": TargetIntent.OPEN,
     }
     values.update(overrides)
-    return PositionProposal(**values)
+    return PositionRequest(**values)
 
 
 def target(**overrides) -> PositionTarget:
@@ -107,7 +107,7 @@ def test_messages_reject_non_finite_scalar_values(value):
 def test_required_creation_timestamps_reject_non_datetimes(value):
     for factory in (
         lambda: signal(created_at=value),
-        lambda: proposal(created_at=value),
+        lambda: request(created_at=value),
         lambda: target(created_at=value),
     ):
         with pytest.raises(TypeError, match="must be a datetime"):
@@ -118,7 +118,7 @@ def test_required_creation_timestamps_reject_non_datetimes(value):
     "factory",
     [
         lambda: signal(created_at=datetime(2026, 1, 1)),
-        lambda: proposal(created_at=datetime(2026, 1, 1)),
+        lambda: request(created_at=datetime(2026, 1, 1)),
         lambda: target(created_at=datetime(2026, 1, 1)),
     ],
 )
@@ -136,15 +136,15 @@ def test_signal_as_of_is_optional_but_must_be_an_aware_datetime():
         signal(as_of=datetime(2026, 1, 1))
 
 
-@pytest.mark.parametrize("source_key", [1, True])
-def test_signal_rejects_non_string_source_key(source_key):
-    with pytest.raises(TypeError, match="source_key must be a string"):
-        signal(source_key=source_key)
+@pytest.mark.parametrize("signal_key", [1, True])
+def test_signal_rejects_non_string_signal_key(signal_key):
+    with pytest.raises(TypeError, match="signal_key must be a string"):
+        signal(signal_key=signal_key)
 
 
-def test_signal_rejects_empty_source_key():
-    with pytest.raises(ValueError, match="source_key must not be empty"):
-        signal(source_key="")
+def test_signal_rejects_empty_signal_key():
+    with pytest.raises(ValueError, match="signal_key must not be empty"):
+        signal(signal_key="")
 
 
 def test_signal_requires_signal_type_enum():
@@ -153,24 +153,24 @@ def test_signal_requires_signal_type_enum():
 
 
 @pytest.mark.parametrize("direction", [1.0, True, "1"])
-def test_position_proposal_rejects_non_integer_direction(direction):
+def test_position_request_rejects_non_integer_direction(direction):
     with pytest.raises(TypeError, match="must be an integer"):
-        proposal(target_direction=direction)
+        request(target_direction=direction)
 
 
-def test_position_proposal_rejects_integer_outside_binary_direction():
+def test_position_request_rejects_integer_outside_binary_direction():
     with pytest.raises(ValueError, match="-1, 0, or 1"):
-        proposal(target_direction=2)
+        request(target_direction=2)
 
 
-def test_position_proposal_requires_typed_signal_and_intent():
+def test_position_request_requires_typed_signal_and_intent():
     with pytest.raises(TypeError, match="signal must be a Signal"):
-        proposal(signal="signal")
-    with pytest.raises(TypeError, match="intent must be a PositionIntent"):
-        proposal(intent="OPEN")
+        request(signal="signal")
+    with pytest.raises(TypeError, match="intent must be a TargetIntent"):
+        request(intent="OPEN")
 
 
-def test_signal_allows_blueprint_contract_but_target_requires_concrete_contract():
+def test_signal_allows_contract_spec_contract_but_target_requires_concrete_contract():
     assert signal(contract=contract(0)).contract.conId == 0
 
     with pytest.raises(ValueError, match="non-zero conId"):
@@ -190,35 +190,35 @@ def test_messages_reject_non_mapping_metadata(factory):
 
 
 def test_position_target_has_optional_typed_intent_and_absolute_quantity():
-    direct = target(target_quantity=-3)
-    one_to_one = target(intent=PositionIntent.REVERSE)
+    contract_execution = target(target_quantity=-3)
+    position = target(intent=TargetIntent.REVERSE)
 
-    assert direct.target_quantity == -3
-    assert direct.intent is None
-    assert one_to_one.intent is PositionIntent.REVERSE
-    with pytest.raises(TypeError, match="PositionIntent"):
+    assert contract_execution.target_quantity == -3
+    assert contract_execution.intent is None
+    assert position.intent is TargetIntent.REVERSE
+    with pytest.raises(TypeError, match="TargetIntent"):
         target(intent="OPEN")
 
 
 @pytest.mark.parametrize(
-    ("source_key", "exception", "message"),
+    ("signal_key", "exception", "message"),
     [
-        (1, TypeError, "source_key must be a string"),
-        ("", ValueError, "source_key must not be empty"),
+        (1, TypeError, "signal_key must be a string"),
+        ("", ValueError, "signal_key must not be empty"),
     ],
 )
-def test_position_target_validates_optional_source_key(source_key, exception, message):
+def test_position_target_validates_optional_signal_key(signal_key, exception, message):
     with pytest.raises(exception, match=message):
-        target(source_key=source_key)
+        target(signal_key=signal_key)
 
 
 def test_position_target_has_no_user_defined_execution_key():
-    """Removed direct identity is not silently accepted as a compatibility API."""
+    """Removed contract_execution identity is not silently accepted as a compatibility API."""
     with pytest.raises(TypeError, match="target_key"):
         target(target_key="removed")
 
 
-@pytest.mark.parametrize("message", [signal(), proposal(), target()])
+@pytest.mark.parametrize("message", [signal(), request(), target()])
 def test_envelope_messages_are_explicitly_unhashable(message):
     with pytest.raises(TypeError, match="unhashable"):
         hash(message)

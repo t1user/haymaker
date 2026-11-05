@@ -1,3 +1,4 @@
+from runtime_helpers import signal_execution_state
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -6,14 +7,15 @@ import ib_insync as ibi
 import pytest
 from helpers import wait_for_condition
 
-from haymaker.book import PositionState, TargetState
+from haymaker.book import ContractTarget
 from haymaker.components import (
     BracketExecutionModel,
+    ExecutionMode,
     ExecutionModel,
     ExecutionRouter,
     ExecutionRule,
     FixedStop,
-    PositionIntent,
+    TargetIntent,
     PositionTarget,
     SerialTargetExecutionModel,
     StandardOrderRole,
@@ -103,7 +105,7 @@ class SeriesRegistry:
 def target(
     quantity,
     *,
-    source_key=None,
+    signal_key=None,
     intent=None,
     symbol="ES",
     con_id=1,
@@ -113,7 +115,7 @@ def target(
     return PositionTarget(
         contract=contract(symbol, con_id),
         target_quantity=quantity,
-        source_key=source_key,
+        signal_key=signal_key,
         intent=intent,
         metadata=metadata or {},
         created_at=created_at or datetime.now(timezone.utc),
@@ -158,11 +160,11 @@ def working_adjustment(
     symbol="ES",
     con_id=1,
 ):
-    """Persist a direct target and register its active adjustment order."""
+    """Persist a contract target and register its active adjustment order."""
 
     target_contract = contract(symbol, con_id)
     runtime.book.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name=owner,
             contract=target_contract,
             target_quantity=target_quantity,
@@ -262,7 +264,7 @@ def test_serial_executes_concrete_target_without_implicit_roll_decision(
 
 def test_serial_model_rejects_wrong_message_at_runtime(execution_runtime):
     with pytest.raises(TypeError, match="only PositionTarget"):
-        SerialTargetExecutionModel(name="serial").onData({"quantity": 1})
+        SerialTargetExecutionModel(name="serial").onData({"filled_quantity": 1})
 
 
 def test_serial_model_supports_same_side_resizing(execution_runtime):
@@ -303,7 +305,7 @@ def test_serial_recovery_resumes_persisted_target(execution_runtime):
     runtime, _, trader = execution_runtime
     model = SerialTargetExecutionModel(name="serial")
     model.book.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name="serial",
             contract=contract(),
             target_quantity=2,
@@ -367,32 +369,32 @@ def test_bracket_model_rejects_invalid_or_conflicting_future_roll_policy(
 def test_bracket_model_rejects_missing_or_stale_intent(execution_runtime):
     model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
 
-    with pytest.raises(ValueError, match="requires PositionIntent"):
-        model.onData(target(1, source_key="alpha", metadata={"atr": 5}))
+    with pytest.raises(ValueError, match="requires TargetIntent"):
+        model.onData(target(1, signal_key="alpha", metadata={"atr": 5}))
     with pytest.raises(ValueError, match="inconsistent"):
         model.onData(
             target(
                 1,
-                source_key="alpha",
-                intent=PositionIntent.CLOSE,
+                signal_key="alpha",
+                intent=TargetIntent.CLOSE,
                 metadata={"atr": 5},
             )
         )
 
-    assert model.book.positions.for_source("alpha") is None
+    assert model.book.positions._for_signal("alpha") is None
 
 
 def test_bracket_model_rejects_same_side_resize(execution_runtime):
     runtime, _, _ = execution_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
-            position_id="episode",
-            bracket_inputs={"atr": 5},
+            position_id="position",
+            protection_inputs={"atr": 5},
         )
     )
     model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
@@ -401,8 +403,8 @@ def test_bracket_model_rejects_same_side_resize(execution_runtime):
         model.onData(
             target(
                 2,
-                source_key="alpha",
-                intent=PositionIntent.OPEN,
+                signal_key="alpha",
+                intent=TargetIntent.OPEN,
                 metadata={"atr": 5},
             )
         )
@@ -426,13 +428,13 @@ def test_bracket_model_validates_recovery_inputs(execution_runtime, value):
         model.onData(
             target(
                 1,
-                source_key="alpha",
-                intent=PositionIntent.OPEN,
+                signal_key="alpha",
+                intent=TargetIntent.OPEN,
                 metadata={"atr": value},
             )
         )
 
-    assert model.book.positions.for_source("alpha") is None
+    assert model.book.positions._for_signal("alpha") is None
 
 
 def test_brackets_attach_only_after_complete_entry_fill(execution_runtime):
@@ -445,8 +447,8 @@ def test_brackets_attach_only_after_complete_entry_fill(execution_runtime):
     model.onData(
         target(
             2,
-            source_key="alpha",
-            intent=PositionIntent.OPEN,
+            signal_key="alpha",
+            intent=TargetIntent.OPEN,
             metadata={"atr": 5},
         )
     )
@@ -463,11 +465,11 @@ def test_brackets_attach_only_after_complete_entry_fill(execution_runtime):
     assert len(trader.trades) == 2
     assert controller.book.orders.by_id(2).role == StandardOrderRole.STOP_LOSS
     assert controller.book.orders.by_id(2).position_id == (
-        controller.book.positions.for_source("alpha").position_id
+        controller.book.positions._for_signal("alpha").position_id
     )
 
 
-def test_regular_close_joins_active_bracket_oca_group(execution_runtime):
+def test_regular_close_joins_active_signal_oca_group(execution_runtime):
     """A regular close lets IB cancel stop and take-profit through OCA."""
 
     _, controller, trader = execution_runtime
@@ -480,8 +482,8 @@ def test_regular_close_joins_active_bracket_oca_group(execution_runtime):
     model.onData(
         target(
             1,
-            source_key="alpha",
-            intent=PositionIntent.OPEN,
+            signal_key="alpha",
+            intent=TargetIntent.OPEN,
             metadata={"atr": 5},
         )
     )
@@ -495,8 +497,8 @@ def test_regular_close_joins_active_bracket_oca_group(execution_runtime):
     model.onData(
         target(
             0,
-            source_key="alpha",
-            intent=PositionIntent.CLOSE,
+            signal_key="alpha",
+            intent=TargetIntent.CLOSE,
         )
     )
 
@@ -519,8 +521,8 @@ async def test_entry_fill_continues_to_newer_close_target(execution_runtime):
     model.onData(
         target(
             1,
-            source_key="alpha",
-            intent=PositionIntent.OPEN,
+            signal_key="alpha",
+            intent=TargetIntent.OPEN,
             metadata={"atr": 5},
         )
     )
@@ -528,8 +530,8 @@ async def test_entry_fill_continues_to_newer_close_target(execution_runtime):
     model.onData(
         target(
             0,
-            source_key="alpha",
-            intent=PositionIntent.CLOSE,
+            signal_key="alpha",
+            intent=TargetIntent.CLOSE,
         )
     )
 
@@ -550,17 +552,17 @@ async def test_entry_fill_continues_to_newer_close_target(execution_runtime):
 
 
 @pytest.mark.asyncio
-async def test_reversal_closes_then_opens_new_episode(execution_runtime):
+async def test_reversal_closes_then_opens_new_position(execution_runtime):
     runtime, controller, trader = execution_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
-            position_id="old-episode",
-            bracket_inputs={"atr": 5},
+            position_id="old-position",
+            protection_inputs={"atr": 5},
         )
     )
     model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
@@ -568,8 +570,8 @@ async def test_reversal_closes_then_opens_new_episode(execution_runtime):
     model.onData(
         target(
             -1,
-            source_key="alpha",
-            intent=PositionIntent.REVERSE,
+            signal_key="alpha",
+            intent=TargetIntent.REVERSE,
             metadata={"atr": 5},
         )
     )
@@ -581,23 +583,23 @@ async def test_reversal_closes_then_opens_new_episode(execution_runtime):
     await asyncio.sleep(0)
 
     assert trader.trades[1].order.action == "SELL"
-    assert runtime.book.positions.for_source("alpha").position_id != "old-episode"
-    assert runtime.book.positions.for_source("alpha").bracket_inputs == {"atr": 5}
+    assert runtime.book.positions._for_signal("alpha").position_id != "old-position"
+    assert runtime.book.positions._for_signal("alpha").protection_inputs == {"atr": 5}
 
 
-def test_stop_fill_closes_episode_and_prevents_restart_reentry(
+def test_stop_fill_closes_position_and_prevents_restart_reentry(
     execution_runtime,
 ):
     runtime, controller, trader = execution_runtime
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
-            position_id="episode",
-            bracket_inputs={"atr": 5},
+            position_id="position",
+            protection_inputs={"atr": 5},
         )
     )
     model = BracketExecutionModel("alpha", name="brackets", stop=FixedStop(2))
@@ -606,15 +608,15 @@ def test_stop_fill_closes_episode_and_prevents_restart_reentry(
         ibi.Order(action="SELL", totalQuantity=1, orderType="STP"),
         role=StandardOrderRole.STOP_LOSS,
         execution_model_name=model.name,
-        source_key="alpha",
-        position_id="episode",
+        signal_key="alpha",
+        position_id="position",
     )
 
     assert stop is not None
     apply_fill(controller, stop, 1)
 
-    state = runtime.book.positions.for_source("alpha")
-    assert state.quantity == 0
+    state = runtime.book.positions._for_signal("alpha")
+    assert state.filled_quantity == 0
     assert state.target_quantity == 0
     assert state.position_id is None
     assert state.blocked_direction == 1
@@ -623,6 +625,8 @@ def test_stop_fill_closes_episode_and_prevents_restart_reentry(
 
 
 class RecordingModel(ExecutionModel):
+    mode = ExecutionMode.CONTRACT
+
     def __init__(self, **kwargs):
         self.accepted = []
         self.recoveries = 0
@@ -636,6 +640,41 @@ class RecordingModel(ExecutionModel):
         self.recoveries += 1
 
 
+def test_execution_mode_is_exclusive_without_rolling(execution_runtime):
+    _, controller, trader = execution_runtime
+
+    class SignalModel(RecordingModel):
+        mode = ExecutionMode.SIGNAL
+
+    assert controller.execution_mode is None
+    with pytest.raises(RuntimeError, match="Register an execution model"):
+        controller.future_roller.register_executor()
+    SignalModel(name="first")
+    SignalModel(name="second")
+    with pytest.raises(ValueError, match="already uses SIGNAL"):
+        RecordingModel()
+    assert controller.execution_mode is ExecutionMode.SIGNAL
+    assert controller.future_roller.executor is None
+    assert not trader.trades
+
+
+def test_execution_model_requires_a_declared_mode(execution_runtime):
+    _, controller, _ = execution_runtime
+
+    class UndeclaredModel(ExecutionModel):
+        accept = RecordingModel.accept
+        recover = RecordingModel.recover
+
+    class InvalidModel(RecordingModel):
+        mode = "CONTRACT"
+
+    with pytest.raises(TypeError, match="abstract.*mode"):
+        UndeclaredModel()
+    with pytest.raises(TypeError, match="must be an ExecutionMode"):
+        InvalidModel()
+    assert controller.execution_mode is None
+
+
 def test_router_rejects_wrong_message_at_runtime(execution_runtime):
     router = ExecutionRouter(
         [
@@ -647,7 +686,7 @@ def test_router_rejects_wrong_message_at_runtime(execution_runtime):
     )
 
     with pytest.raises(TypeError, match="only PositionTarget"):
-        router.onData({"quantity": 1})
+        router.onData({"filled_quantity": 1})
 
 
 def test_router_first_match_and_default(execution_runtime):
@@ -716,7 +755,7 @@ def test_router_starts_every_model_once_per_generation(execution_runtime):
     assert second.recoveries == 2
 
 
-def test_router_ignores_one_to_one_working_orders(execution_runtime):
+def test_router_ignores_signal_execution_working_orders(execution_runtime):
     runtime, controller, _ = execution_runtime
     current_rule = RecordingModel(name="current")
     router = ExecutionRouter(
@@ -727,12 +766,12 @@ def test_router_ignores_one_to_one_working_orders(execution_runtime):
             )
         ]
     )
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
         )
     )
@@ -741,7 +780,7 @@ def test_router_ignores_one_to_one_working_orders(execution_runtime):
         ibi.MarketOrder("SELL", 1),
         role=StandardOrderRole.CLOSE,
         execution_model_name="brackets",
-        source_key="alpha",
+        signal_key="alpha",
     )
     incoming = target(0)
     runtime.workload_generation = 1
@@ -764,12 +803,12 @@ def test_router_current_rules_own_held_position_without_working_order(
         [ExecutionRule(predicate=lambda target: True, model=current)],
         default_model=old,
     )
-    runtime.book.update_position(
-        PositionState(
-            source_key="alpha",
+    runtime.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="old",
             contract=contract(),
-            quantity=1,
+            filled_quantity=1,
             target_quantity=1,
         )
     )
@@ -876,7 +915,7 @@ def test_router_blocks_active_order_without_target_state(
         router.onStart({})
 
     assert owner.recoveries == 0
-    assert "has no recoverable TargetState" in caplog.text
+    assert "has no recoverable ContractTarget" in caplog.text
 
 
 def test_router_blocks_ambiguous_active_adjustment_owners(
@@ -971,7 +1010,7 @@ def test_router_does_not_partially_reassign_unroutable_idle_targets(
     created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     for symbol, con_id in (("ES", 1), ("NQ", 2)):
         runtime.book.update_target(
-            TargetState(
+            ContractTarget(
                 execution_model_name="old",
                 contract=contract(symbol, con_id),
                 target_quantity=1,
@@ -996,7 +1035,7 @@ def test_router_hands_idle_recovered_target_to_current_model(execution_runtime):
     runtime, _, _ = execution_runtime
     created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     runtime.book.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name="old",
             contract=contract(),
             target_quantity=2,
@@ -1029,7 +1068,7 @@ def test_serial_recovery_handoff_converges_from_existing_quantity(
     )
     apply_fill(controller, filled, 1)
     runtime.book.update_target(
-        TargetState(
+        ContractTarget(
             execution_model_name="old",
             contract=contract(),
             target_quantity=2,
@@ -1096,8 +1135,8 @@ def test_bracket_recovery_rebinds_active_entry_fill(execution_runtime):
     model.onData(
         target(
             1,
-            source_key="alpha",
-            intent=PositionIntent.OPEN,
+            signal_key="alpha",
+            intent=TargetIntent.OPEN,
             metadata={"atr": 5},
         )
     )

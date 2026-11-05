@@ -289,7 +289,7 @@ class Backtester:
                 start=self.start,
                 end=self.end,
             )
-            repository.register(*runtime.contract_registry.blueprints)
+            repository.register(*runtime.contract_registry.contract_specs)
             await repository.load()
             if not repository.timestamps:
                 raise BacktestConfigurationError(
@@ -591,14 +591,14 @@ class Backtester:
 
         runtime.contract_registry.today = Backtester._registry_datetime(timestamp)
         details = [
-            repository.details_for_blueprint(blueprint)
-            for blueprint in runtime.contract_registry.blueprints
+            repository.details_for_contract_spec(contract_spec)
+            for contract_spec in runtime.contract_registry.contract_specs
         ]
         runtime.contract_registry.reset_data(details)
 
     @staticmethod
     def _start_graph(streamers: Sequence[HistoricalDataStreamer]) -> None:
-        """Propagate framework startup and Contract changes from each source."""
+        """Propagate framework startup and Contract changes from each signal."""
 
         for streamer in streamers:
             streamer.onStart({})
@@ -609,7 +609,7 @@ class Backtester:
 
         result: dict[int, int | None] = {}
         for atom in atoms:
-            if atom._contract_blueprint is None:
+            if atom._contract_spec is None:
                 continue
             contract = atom.contract
             result[id(atom)] = contract.conId if contract is not None else None

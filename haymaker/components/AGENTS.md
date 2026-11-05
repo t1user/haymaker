@@ -5,6 +5,8 @@ safety rules. This file owns component-specific guidance. Usage examples and
 full APIs are in [the execution guide](../../docs/source/execution.rst);
 custom storage configuration is in [the storage guide](../../docs/source/storage.rst).
 
+Use the [terminology reference](../../docs/source/terminology.rst) for domain names; new synonyms require an explicit decision and coordinated updates.
+
 ## Package and public API
 
 - Each public leaf module owns `__all__`. Package initializers aggregate those
@@ -17,30 +19,30 @@ custom storage configuration is in [the storage guide](../../docs/source/storage
 ## Choose the strategy path
 
 ```text
-One-to-one:
-SignalModel -> signal processor -> PositionProposal
+Signal execution:
+SignalModel -> signal processor -> PositionRequest
   -> PortfolioWrapper(PositionAllocator) -> PositionTarget
   -> BracketExecutionModel -> Controller
 
-Direct:
+Contract execution:
 SignalModel paths -> Portfolio -> PositionTarget(s)
   -> ExecutionRouter (optional) -> SerialTargetExecutionModel -> Controller
 ```
 
-A process uses one-to-one or direct execution, not both. Do not make the wrapper
-a shared Portfolio or make execution models own direct allocation policy.
+Every ExecutionModel declares `mode` as `ExecutionMode.SIGNAL` or `ExecutionMode.CONTRACT`. Its base initializer registers the mode with Controller, which rejects mixed models even without futures rolling. Do not make the wrapper
+a shared Portfolio or make execution models own contract allocation policy.
 
 ## Messages and signal production
 
-- `Signal` carries stable `source_key`, Contract, scalar value or
+- `Signal` carries stable `signal_key`, Contract, scalar value or
   `SignalPair(entry, exit)`, SignalType, timestamps and metadata.
   STATE replaces desired state; EVENT is a new occurrence, including repetition.
-  Raw Signals never carry PositionIntent.
-- `PositionProposal` preserves the original Signal, adds direction -1/0/1, and
+  Raw Signals never carry TargetIntent.
+- `PositionRequest` preserves the original Signal, adds direction -1/0/1, and
   requires OPEN/CLOSE/REVERSE intent.
 - `PositionTarget` is an absolute signed setpoint, never a captured current
-  quantity or delta. It requires a concrete non-zero conId. Direct targets omit
-  source_key/intent; one-to-one targets identify a source episode and require
+  quantity or delta. It requires a concrete non-zero conId. Contract targets omit
+  signal_key/intent; signal execution targets identify a signal position and require
   intent at acceptance. Numeric target remains authoritative afterward.
 - Messages are frozen, keyword-only, intentionally unhashable and validate
   finite values/aware timestamps. Metadata is copied/read-only only at the top
@@ -51,8 +53,8 @@ a shared Portfolio or make execution models own direct allocation policy.
   `SignalCalculation(value, metadata, as_of)`; the framework builds the envelope.
   Override `validate_signal_value` for additional domain checks.
 - `select_signal_contract()` defaults to `self.contract`. It may choose a
-  qualified chain member or `contract_blueprint` for a custom direct Portfolio.
-  One-to-one allocation needs a concrete opening Contract. SignalModels do not
+  qualified chain member or `contract_spec` for a custom contract Portfolio.
+  Signal execution allocation needs a concrete opening Contract. SignalModels do not
   own futures-roll policy.
 - Pandas models implement `df(data)`; its last row is authoritative. User code
   owns ordering, duplicate rows and calculation correctness. `signal_fields`
@@ -60,9 +62,9 @@ a shared Portfolio or make execution models own direct allocation policy.
   non-signal fields, an empty collection none, an explicit collection selected
   fields. Override `row_to_calculation(row)`, not envelope construction.
 
-## One-to-one processing and allocation
+## Signal execution processing and allocation
 
-- Processors query `Book.effective_quantity(source_key)`, including working
+- Processors query `Book.effective_quantity(signal_key)`, including working
   orders, and suppress inputs requiring no action. STATE zero requests flat;
   EVENT zero is ignored.
 - `BinarySignalProcessor` accepts only -1/0/1. OpposingSignalPolicy.CLOSE closes
@@ -70,30 +72,30 @@ a shared Portfolio or make execution models own direct allocation policy.
   SignalPair, uses entry while flat and exit while positioned, and never
   directly reverses. Preserve the full transition matrices and paired input.
 - Lock-aware behavior is opt-in. A STOP_LOSS or TAKE_PROFIT fill that flattens
-  the episode blocks re-entry in that direction. The first actual fill of a
+  the position blocks re-entry in that direction. The first actual fill of a
   permitted opposite OPEN clears it; CLOSE and ROLL preserve it.
-- Allocators implement `target_for(proposal) -> PositionTarget | None`, preserving
-  source, Contract and metadata. FixedSizeAllocator accepts a positive size,
-  source-keyed mapping or callable; missing mappings raise. Use None, not a zero
-  OPEN allocation, to suppress a proposal.
-- PortfolioWrapper transfers mandatory proposal intent and emits at most one
+- Allocators implement `target_for(request) -> PositionTarget | None`, preserving
+  signal, Contract and metadata. FixedSizeAllocator accepts a positive size,
+  signal-keyed mapping or callable; missing mappings raise. Use None, not a zero
+  OPEN allocation, to suppress a request.
+- PortfolioWrapper transfers mandatory request intent and emits at most one
   target. It never selects the held Contract or orchestrates closes/reversals.
 
-## Direct Portfolio policy
+## Contract Portfolio policy
 
 - Construct/share a Portfolio instance explicitly; it is not a singleton.
   Implement `process(signal)` yielding zero or more concrete targets. One input
   may change several Contracts.
-- `sources=None` permits dynamic membership with no completeness policy. An
-  explicit collection rejects unknown sources; use a collection, not a bare str.
+- `signal_keys=None` permits dynamic membership with no completeness policy. An
+  explicit collection rejects unknown signals; use a collection, not a bare str.
   Concrete Portfolios own input state, supported SignalTypes, EVENT accumulation,
   synchronization, `as_of`, duplicate/late inputs and recomputation policy.
-- Portfolio chooses source allocations and concrete Contracts, including which
+- Portfolio chooses signal allocations and concrete Contracts, including which
   held expiries to reduce. Execution must not substitute a different expiry.
-  `positions_for_blueprint` queries filled holdings via registry membership;
-  it does not reconstruct desired per-source allocations from broker net fills.
-- Use `book.positions.quantity(contract)` and `book.positions.by_contract()` in
-  either execution mode. They read maintained balances; do not add mode-specific
+  `positions_for_contract_spec` queries filled holdings via registry membership;
+  it does not reconstruct desired per-signal allocations from broker net fills.
+- Use `book.positions.filled_quantity(contract)` and `book.positions.by_contract()` in
+  either execution mode. They read maintained filled positions; do not add mode-specific
   quantity stores or query-time execution replay to components.
 - Optional `PortfolioStateMixin` exposes explicit `load_state/save_state` under
   `portfolio_key`, defaulting to Book. Persist normalized recovery mappings,
@@ -113,7 +115,7 @@ a shared Portfolio or make execution models own direct allocation policy.
   Router rules are fixed, ordered, first-match; no default means fail closed.
   The same model instance may serve several rules and the default, but distinct
   instances must have distinct names. Start models once per workload generation.
-- Current rules, not persisted affinity, select models. Active direct
+- Current rules, not persisted affinity, select models. Active contract
   TARGET_ADJUSTMENT orders must still select their persisted owner. A mismatch,
   missing state, ambiguity or unroutable recovery blocks that Router locally;
   it does not cancel orders or disable Controller globally.
@@ -122,17 +124,17 @@ a shared Portfolio or make execution models own direct allocation policy.
   and creation time; metadata-based recovery routing is unsupported.
 - SerialTargetExecutionModel permits one active adjustment per concrete conId,
   supports same-side resizing and independently converges multiple expiries.
-- BracketExecutionModel owns one source episode: OPEN uses the incoming
+- BracketExecutionModel owns one signal position: OPEN uses the incoming
   Contract; CLOSE uses Book's held/pending-entry Contract; REVERSE closes that
-  episode completely before opening the incoming Contract under a new
-  position_id. Hold `contract/bracket_inputs` separately from pending
-  `target_contract/target_bracket_inputs`; target acceptance cannot overwrite
+  position completely before opening the incoming Contract under a new
+  position_id. Hold `contract/protection_inputs` separately from pending
+  `target_contract/target_protection_inputs`; target acceptance cannot overwrite
   a holding. Reject non-zero same-side resizing.
 - Attach protection only after complete entry filling. Stop-loss is critical;
   take-profit is optional. Regular closes join the protective orders' OCA group
   so IB cancels the other exits when one fills.
 - Live completion and offline initial recovery share `ensure_entry_brackets`.
-  Use the exact episode's saved inputs and normalized weighted entry price, not
+  Use the exact position's saved inputs and normalized weighted entry price, not
   new target inputs or broker net cost. Recovery needs Contract ticks ready;
   it must not depend on a new Signal or commission callback.
 - Existing stop evidence, including terminal history, prevents automatic
@@ -150,22 +152,22 @@ a shared Portfolio or make execution models own direct allocation policy.
 ## Futures rolling
 
 - Controller owns discovery and recovery coordination. One configured
-  FutureRollExecutor family owns durable sequencing; direct and bracket
+  FutureRollExecutor family owns durable sequencing; contract and signal
   families cannot mix. Preserve mode/executor name while a roll is incomplete.
 - Default PastToActiveRollPolicy rolls only selector `past_contracts` into ACTIVE,
   retaining NEXT and later eligible expiries. Custom FutureRollPolicy selects
   triggers and same-series destinations from a date-refreshed selector.
   Stable RollDecision occurrence labels prevent repeated fixed-schedule rolls.
   Custom schedulers may call `controller.future_roller.roll()`.
-- Bracket models default to `auto_roll_futures=True`; False is the per-source
+- Bracket models default to `auto_roll_futures=True`; False is the per-signal
   opt-out. SignalModels do not declare this policy.
-- Direct rolls wait for endpoint adjustments and save repeat-safe target
+- Contract rolls wait for endpoint adjustments and save repeat-safe target
   transfers: old target zero, destination target plus old target. Newer explicit
   targets take precedence; serial convergence resumes after completion.
-- Bracket rolls preserve source/position_id and move broker-net exposure.
-  Refresh all unprocessed episode quantities/identities after OPEN/CLOSE work
-  and accounting settle. Skip flattened sources without losing completed logical
-  offsets. Block replaced episodes or impossible net allocations before trading.
+- Signal rolls preserve signal/position_id and move broker-net exposure.
+  Refresh all unprocessed position quantities/identities after OPEN/CLOSE work
+  and accounting settle. Skip flattened signals without losing completed logical
+  offsets. Block replaced positions or impossible net allocations before trading.
 - After movement, replace protection; the new critical stop must be active
   before roll completion, while take-profit replacement is optional.
 
@@ -183,13 +185,13 @@ a shared Portfolio or make execution models own direct allocation policy.
   model owns its persistence state. Queue acceptance precedes Signal emission
   to attach a reference, but enqueue failure never suppresses the Signal.
   Direct `create_signal()` calls do not save.
-- Audit symbols are `{source_key}_{ACTIVE.localSymbol}_{run_started_at}`.
+- Audit symbols are `{signal_key}_{ACTIVE.localSymbol}_{run_started_at}`.
   ACTIVE, not transaction Contract/NEXT, determines generation. A successful
   calculation under changed ACTIVE writes the full frame; later saves append
   new rows. Failed calculation/adjustment creates no generation; previous
   generations stay unchanged. Supervised restart continues the run; a new
   process starts a new run.
-- Audit metadata records source, run start and ACTIVE Contract. Futures history
+- Audit metadata records signal, run start and ACTIVE Contract. Futures history
   may be back-adjusted without downstream notification; append-only storage is
   not a record of every historical revision.
 - EventTimeout is user-owned, rearms on new events and survives workload restart.
@@ -206,6 +208,6 @@ a shared Portfolio or make execution models own direct allocation policy.
 Use the root validation commands and runtime fixtures; test public exports.
 Cover changed transition matrices, message/connection validation, allocation,
 target supersession, order ownership, duplicate fills/callbacks, orderId/permId
-rebinding, episode attribution, OCA, partial/full fills, offline recovery,
+rebinding, position attribution, OCA, partial/full fills, offline recovery,
 rolling and ACTIVE/NEXT audit boundaries.
 Do not claim complete live safety from the fake broker.

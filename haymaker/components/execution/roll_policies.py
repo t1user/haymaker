@@ -16,11 +16,11 @@ class RollDecision:
     """Request relocation of a complete holding within its registered chain.
 
     Args:
-        destination: Qualified Future from the holding's registered blueprint.
+        destination: Qualified Future from the holding's registered contract_spec.
         occurrence: Optional stable schedule label, such as ``2026-09-early``.
             Use it for fixed schedules whose condition remains true after a
-            roll. Book remembers completion for the source (one-to-one) or
-            old and replacement Contracts (direct), preventing repeated rolls
+            roll. Book remembers completion for the signal (signal execution) or
+            old and replacement Contracts (contract execution), preventing repeated rolls
             for that occurrence. Use a new label for the next scheduled roll.
             With None, the policy's condition alone must prevent repetition.
 

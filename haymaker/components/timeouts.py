@@ -29,7 +29,7 @@ class EventTimeout:
     events that have no market-data or supervisor semantics. Construction arms
     one inactivity interval. Every source emission restarts that interval. A
     deadline calls ``callback`` once and then remains quiet until another
-    source emission begins a new inactivity episode.
+    source emission begins a new inactivity interval.
 
     Positive intervals must be constructed while an asyncio event loop is
     running. The owner controls lifetime explicitly with :meth:`cancel`;
@@ -41,7 +41,7 @@ class EventTimeout:
         seconds: Non-negative inactivity interval in seconds. Zero disables
             deadline scheduling while retaining the event connection.
         callback: Synchronous or asynchronous no-argument function called once
-            for each inactivity episode.
+            for each inactivity interval.
         name: Optional diagnostic label. An automatic numeric label is used
             when omitted.
 
@@ -120,7 +120,7 @@ class EventTimeout:
 
     @property
     def triggered(self) -> bool:
-        """Return whether the current inactivity episode reached its deadline."""
+        """Return whether the current inactivity interval reached its deadline."""
 
         return self._triggered
 

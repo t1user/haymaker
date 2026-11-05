@@ -29,16 +29,18 @@ class Model(PandasSignalModel):
         return result
 
 
-def test_signal_contract_hook_can_pass_blueprint_to_direct_portfolio(atom_runtime):
+def test_signal_contract_hook_can_pass_contract_spec_to_contract_portfolio(
+    atom_runtime,
+):
     """User overrides only Contract selection; the framework builds the envelope."""
 
-    class BlueprintModel(Model):
+    class ContractSpecModel(Model):
         def select_signal_contract(self) -> ibi.Contract:
-            """Leave concrete Contract selection to the direct Portfolio."""
-            return self.contract_blueprint
+            """Leave concrete Contract selection to the contract Portfolio."""
+            return self.contract_spec
 
-    blueprint = ibi.Stock("AAPL", "SMART", "USD")
-    model = BlueprintModel("alpha", blueprint, SignalType.STATE)
+    contract_spec = ibi.Stock("AAPL", "SMART", "USD")
+    model = ContractSpecModel("alpha", contract_spec, SignalType.STATE)
     qualified = ibi.Stock("AAPL", "SMART", "USD", conId=123)
     atom_runtime.contract_registry.reset_data(
         [[ibi.ContractDetails(contract=qualified)]]
@@ -46,9 +48,9 @@ def test_signal_contract_hook_can_pass_blueprint_to_direct_portfolio(atom_runtim
     frame = pd.DataFrame({"close": [12]})
     signal = model.create_signal(frame)
     assert model.contract == qualified
-    assert signal.contract == blueprint
+    assert signal.contract == contract_spec
     assert signal.contract.conId == 0
-    assert signal.source_key == "alpha"
+    assert signal.signal_key == "alpha"
     assert signal.value == 1
     assert signal.metadata["atr"] == 2.5
 
@@ -91,13 +93,13 @@ class RecordingPersistence:
         self,
         frame: pd.DataFrame,
         *,
-        source_key: str,
+        signal_key: str,
         active_contract: ibi.Contract,
         run_started_at: datetime,
     ) -> str | None:
         """Record one non-blocking persistence request."""
 
-        self.calls.append((frame, source_key, active_contract, run_started_at))
+        self.calls.append((frame, signal_key, active_contract, run_started_at))
         return self.reference
 
 
@@ -146,7 +148,7 @@ def install_selector(
     monkeypatch.setattr(
         atom_runtime.contract_registry,
         "get_selector",
-        lambda blueprint: selector,
+        lambda contract_spec: selector,
     )
 
 
@@ -161,8 +163,8 @@ def test_signal_models_are_identity_based_dataclasses_without_roll_policy(
     assert atom_runtime.future_roll_policies == {}
 
 
-def test_signal_model_rejects_non_string_source_key(atom_runtime):
-    with pytest.raises(TypeError, match="source_key must be a string"):
+def test_signal_model_rejects_non_string_signal_key(atom_runtime):
+    with pytest.raises(TypeError, match="signal_key must be a string"):
         Model(
             1,
             ibi.Future(conId=1, symbol="ES", exchange="CME"),
@@ -179,7 +181,7 @@ def test_pandas_model_emits_structured_signal(atom_runtime):
 
     assert output == [
         Signal(
-            source_key="alpha",
+            signal_key="alpha",
             contract=subject.contract,
             value=1,
             signal_type=SignalType.STATE,
@@ -236,7 +238,7 @@ def test_signal_model_owns_signal_envelope_and_both_timestamps(atom_runtime):
 
     result = subject.create_signal(1)
 
-    assert result.source_key == "alpha"
+    assert result.signal_key == "alpha"
     assert result.contract == subject.contract
     assert result.value == 1.0
     assert result.signal_type is SignalType.STATE
@@ -442,7 +444,7 @@ def test_custom_row_conversion_supplies_only_calculated_fields(atom_runtime):
 
     result = subject.create_signal(frame())
 
-    assert result.source_key == "alpha"
+    assert result.signal_key == "alpha"
     assert result.contract == subject.contract
     assert result.signal_type is SignalType.STATE
     assert result.value == 1.0
@@ -535,7 +537,7 @@ def test_successful_persistence_writes_full_frame_then_only_new_rows(
     assert len(sink.calls[0][2]) == 2
     assert list(sink.calls[1][2].index) == [datetime(2026, 1, 3, tzinfo=timezone.utc)]
     assert result.metadata["audit_symbol"] == sink.calls[0][1]
-    assert sink.calls[0][3]["source_key"] == "alpha"
+    assert sink.calls[0][3]["signal_key"] == "alpha"
     assert sink.calls[0][3]["active_contract"] == misc.tree(active)
 
 
@@ -561,7 +563,7 @@ def test_active_contract_change_starts_new_complete_generation(
     monkeypatch.setattr(
         atom_runtime.contract_registry,
         "get_selector",
-        lambda blueprint: selector,
+        lambda contract_spec: selector,
     )
     sink = FakeAuditSink()
     subject = model(persistence=queued_persistence(sink))

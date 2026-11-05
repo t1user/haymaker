@@ -1,8 +1,9 @@
 """Safety boundaries for inferred position corrections and offline recovery."""
 
+from runtime_helpers import replace_signal_state, signal_execution_state
+
 import asyncio
 from copy import deepcopy
-from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
 
@@ -10,13 +11,12 @@ import ib_insync as ibi
 import pytest
 from test_controller import FakeTrader, contract, fill, set_broker_state
 
+from haymaker.enums import ExecutionMode
 from haymaker.book import (
     Book,
-    FutureRollMode,
-    PositionState,
     RollParticipant,
     RollState,
-    TargetState,
+    ContractTarget,
 )
 from haymaker.components import StandardOrderRole
 from haymaker.controller import Controller
@@ -27,7 +27,7 @@ from haymaker.controller.sync_coordinator import SyncCoordinator
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restart_before_correction", [False, True])
 @pytest.mark.parametrize("unknown_order", [False, True])
-@pytest.mark.parametrize("accounting", ["episode", "opposing", "direct"])
+@pytest.mark.parametrize("accounting", ["position", "opposing", "contract"])
 async def test_fail_preserves_accounting_and_blocks_recovery(
     atom_runtime,
     monkeypatch,
@@ -44,7 +44,7 @@ async def test_fail_preserves_accounting_and_blocks_recovery(
     atom_runtime.bind_controller(controller)
     held = contract()
     now = datetime.now(timezone.utc)
-    if accounting == "direct":
+    if accounting == "contract":
         opening = trader.trade(held, ibi.MarketOrder("BUY", 2))
         controller.register_order(
             opening,
@@ -53,7 +53,7 @@ async def test_fail_preserves_accounting_and_blocks_recovery(
         )
         controller.book.apply_fill(opening, fill(opening, quantity=2))
         controller.book.update_target(
-            TargetState(
+            ContractTarget(
                 execution_model_name="serial",
                 contract=held,
                 target_quantity=2,
@@ -64,16 +64,16 @@ async def test_fail_preserves_accounting_and_blocks_recovery(
         for source, quantity in (
             [("alpha", 2), ("beta", -1)] if accounting == "opposing" else [("alpha", 2)]
         ):
-            controller.book.update_position(
-                PositionState(
-                    source_key=source,
+            controller.book._update_signal_state(
+                signal_execution_state(
+                    signal_key=source,
                     execution_model_name="brackets",
                     contract=held,
-                    quantity=quantity,
+                    filled_quantity=quantity,
                     target_quantity=quantity,
                     target_created_at=now,
-                    position_id=f"{source}-episode",
-                    bracket_inputs={"atr": 2},
+                    position_id=f"{source}-position",
+                    protection_inputs={"atr": 2},
                     blocked_direction=1,
                 )
             )
@@ -142,15 +142,15 @@ async def test_correct_requires_a_fresh_clean_pass(controller, monkeypatch):
     controller.position_mismatch_policy = "correct"
     controller._restart_before_correction = False
     controller.sync_resync_delay = 0
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=2,
+            filled_quantity=2,
             target_quantity=2,
-            position_id="episode",
-            bracket_inputs={"atr": 2},
+            position_id="position",
+            protection_inputs={"atr": 2},
         )
     )
     set_broker_state(controller, monkeypatch)
@@ -160,10 +160,10 @@ async def test_correct_requires_a_fresh_clean_pass(controller, monkeypatch):
 
     assert await controller.sync() is SyncOutcome.OK
     assert requested.await_count == 2
-    state = controller.book.positions.for_source("alpha")
-    assert state.quantity == state.target_quantity == 0
+    state = controller.book.positions._for_signal("alpha")
+    assert state.filled_quantity == state.target_quantity == 0
     assert state.position_id is None
-    assert state.bracket_inputs == {}
+    assert state.protection_inputs == {}
     assert not controller._trading_disabled
 
 
@@ -174,12 +174,12 @@ async def test_active_work_defers_decision_until_it_settles(
 ):
     """Working adjustments/roll endpoints defer; a pending roll alone does not."""
     held = contract()
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=held,
-            quantity=2,
+            filled_quantity=2,
             target_quantity=2,
         )
     )
@@ -191,15 +191,15 @@ async def test_active_work_defers_decision_until_it_settles(
         controller.book.update_roll(
             RollState(
                 series_key="es",
-                mode=FutureRollMode.BRACKET,
+                mode=ExecutionMode.SIGNAL,
                 executor_name="rolls",
                 old_contract=held,
                 new_contract=destination,
                 participants=(
                     RollParticipant(
-                        source_key="alpha",
+                        signal_key="alpha",
                         execution_model_name="brackets",
-                        quantity=2,
+                        filled_quantity=2,
                     ),
                 ),
             )
@@ -219,7 +219,7 @@ async def test_active_work_defers_decision_until_it_settles(
         role=role,
         execution_model_name="test",
         params=params,
-        source_key=None if role == "TARGET_ADJUSTMENT" else "alpha",
+        signal_key=None if role == "TARGET_ADJUSTMENT" else "alpha",
     )
     set_broker_state(controller, monkeypatch, open_trades=(working,))
     monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
@@ -227,14 +227,14 @@ async def test_active_work_defers_decision_until_it_settles(
     recover = Mock()
     monkeypatch.setattr(controller.future_roller, "recover", recover)
     assert await SyncCoordinator(controller).run()
-    assert controller.book.positions.quantity(held) == 2
+    assert controller.book.positions.filled_quantity(held) == 2
 
     working.orderStatus.status = ibi.OrderStatus.Cancelled
     set_broker_state(controller, monkeypatch)
     recover.reset_mock()
     assert await controller.sync() is SyncOutcome.FAILED
     recover.assert_not_called()
-    assert controller.book.positions.quantity(held) == 2
+    assert controller.book.positions.filled_quantity(held) == 2
 
 
 @pytest.mark.asyncio
@@ -245,7 +245,7 @@ async def test_known_fills_still_account_after_failure(controller, monkeypatch):
         order=ibi.MarketOrder("BUY", 1, orderId=77, permId=177),
     )
     controller.register_order(
-        working, role="OPEN", execution_model_name="brackets", source_key="alpha"
+        working, role="OPEN", execution_model_name="brackets", signal_key="alpha"
     )
     controller.disable_trading("position mismatch")
     execution = fill(working)
@@ -255,32 +255,34 @@ async def test_known_fills_still_account_after_failure(controller, monkeypatch):
         execId=execution.execution.execId, commission=1, currency="USD"
     )
     await controller.onCommissionReport(working, execution, report)
-    assert controller.book.positions.quantity(contract()) == 1
+    assert controller.book.positions.filled_quantity(contract()) == 1
     assert controller.book.orders.by_id(77).fills[0].commission_report.commission == 1
 
 
 @pytest.mark.asyncio
-async def test_offline_episode_repair_requires_a_new_controller(
+async def test_offline_position_repair_requires_a_new_controller(
     controller, atom_runtime, monkeypatch, order_saver, state_saver
 ):
     """A repaired durable checkpoint is accepted only after process restoration."""
     held = contract()
-    original = PositionState(
-        source_key="alpha",
+    original = signal_execution_state(
+        signal_key="alpha",
         execution_model_name="brackets",
         contract=held,
-        quantity=2,
+        filled_quantity=2,
         target_quantity=2,
-        position_id="episode",
+        position_id="position",
     )
-    controller.book.update_position(original)
+    controller.book._update_signal_state(original)
     set_broker_state(controller, monkeypatch)
     monkeypatch.setattr(controller.ib, "isConnected", lambda: True)
     monkeypatch.setattr(controller.ib, "reqPositionsAsync", AsyncMock(return_value=[]))
     assert await controller.sync() is SyncOutcome.FAILED
 
     # Only fake persistence is edited. Production repair is deliberately offline.
-    repaired = replace(original, quantity=0, target_quantity=0, position_id=None)
+    repaired = replace_signal_state(
+        original, filled_quantity=0, target_quantity=0, position_id=None
+    )
     state_saver.save(repaired.encode())
     restored = Book(
         order_saver=order_saver, state_saver=state_saver, restore=True, save_async=False
@@ -297,15 +299,15 @@ async def test_offline_episode_repair_requires_a_new_controller(
 async def test_new_broker_contract_fails_without_partial_repair(
     controller, monkeypatch, state_saver
 ):
-    """A replacement/new holding cannot clear the old episode before failure."""
-    controller.book.update_position(
-        PositionState(
-            source_key="alpha",
+    """A replacement/new holding cannot clear the old position before failure."""
+    controller.book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
             execution_model_name="brackets",
             contract=contract(),
-            quantity=2,
+            filled_quantity=2,
             target_quantity=2,
-            position_id="episode",
+            position_id="position",
         )
     )
     before = deepcopy(state_saver.read({}))

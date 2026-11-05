@@ -56,14 +56,14 @@ class InitData:
     contract_registry: ContractRegistry
 
     async def __call__(self) -> Self:
-        """Refresh contract details for all registered contract blueprints."""
+        """Refresh contract details for all registered contract specifications."""
 
         log.debug(
             f"---------- INIT START -----> "
-            f"{len(self.contract_registry.blueprints)} contracts."
+            f"{len(self.contract_registry.contract_specs)} contracts."
         )
-        blueprints = self.contract_registry.blueprints.copy()
-        details = await self.acquire_contract_details(blueprints)
+        contract_specs = self.contract_registry.contract_specs.copy()
+        details = await self.acquire_contract_details(contract_specs)
         log.debug(f"Acquired details for {len(details)} contracts.")
         self.contract_registry.reset_data(details)
         log.debug(
@@ -74,7 +74,7 @@ class InitData:
     async def acquire_contract_details(
         self, contracts: list[ibi.Contract]
     ) -> list[list[ibi.ContractDetails]]:
-        """Return contract details for all provided contract blueprints."""
+        """Return contract details for all provided contract specifications."""
 
         details: list[list[ibi.ContractDetails]] = []
         while len(details) != len(contracts):
@@ -201,7 +201,7 @@ class RuntimeContext:
 
     def __str__(self) -> str:
         """Return a compact runtime summary suitable for logs."""
-        return f"RuntimeContext<contracts={len(self.contract_registry.blueprints)}>"
+        return f"RuntimeContext<contracts={len(self.contract_registry.contract_specs)}>"
 
 
 @dataclass
@@ -430,7 +430,7 @@ class LiveRuntime:
             return
         log.warning(
             "Process is exiting with incomplete futures-roll work. Preserve "
-            "the registered roll mode and executor name on restart: states=%s "
+            "the registered execution mode and executor name on restart: states=%s "
             "active_order_ids=%s",
             [
                 {
@@ -448,6 +448,6 @@ class LiveRuntime:
         """Return a compact live-runtime description suitable for logs."""
 
         return (
-            f"LiveRuntime<contracts={len(self.context.contract_registry.blueprints)}, "
+            f"LiveRuntime<contracts={len(self.context.contract_registry.contract_specs)}, "
             f"streamers={len(self.startup_jobs.streamers)}>"
         )

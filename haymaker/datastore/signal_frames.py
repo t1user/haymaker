@@ -37,7 +37,7 @@ class SignalFramePersistence(Protocol):
         self,
         frame: pd.DataFrame,
         *,
-        source_key: str,
+        signal_key: str,
         active_contract: ibi.Contract,
         run_started_at: datetime,
     ) -> str | None:
@@ -46,7 +46,7 @@ class SignalFramePersistence(Protocol):
         Args:
             frame: Complete calculated dataframe. The caller must not mutate it
                 after it has been accepted by this method.
-            source_key: Stable identity of the producing SignalModel.
+            signal_key: Stable identity of the producing SignalModel.
             active_contract: Selector's ACTIVE Contract for generation naming.
             run_started_at: Fixed process run timestamp.
 
@@ -90,7 +90,7 @@ class QueuedSignalFramePersistence:
         self,
         frame: pd.DataFrame,
         *,
-        source_key: str,
+        signal_key: str,
         active_contract: ibi.Contract,
         run_started_at: datetime,
     ) -> str:
@@ -98,7 +98,7 @@ class QueuedSignalFramePersistence:
 
         Args:
             frame: Complete calculated dataframe for the current observation.
-            source_key: Stable identity of the producing SignalModel.
+            signal_key: Stable identity of the producing SignalModel.
             active_contract: Selector's ACTIVE Contract.
             run_started_at: Fixed process run timestamp.
 
@@ -107,12 +107,12 @@ class QueuedSignalFramePersistence:
         """
 
         symbol = self._generation_symbol(
-            source_key,
+            signal_key,
             active_contract,
             run_started_at,
         )
         metadata = {
-            "source_key": source_key,
+            "signal_key": signal_key,
             "run_started_at": run_started_at,
             "active_contract": tree(active_contract),
         }
@@ -136,14 +136,14 @@ class QueuedSignalFramePersistence:
 
     @staticmethod
     def _generation_symbol(
-        source_key: str,
+        signal_key: str,
         active_contract: ibi.Contract,
         run_started_at: datetime,
     ) -> str:
         """Return the stable symbol for one process/ACTIVE generation."""
 
         contract_name = active_contract.localSymbol or active_contract.symbol
-        return f"{source_key}_{contract_name}_{run_started_at.isoformat()}"
+        return f"{signal_key}_{contract_name}_{run_started_at.isoformat()}"
 
 
 @dataclass(frozen=True)

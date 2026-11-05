@@ -55,14 +55,14 @@ class Reset:
 
         submissions_accepted = True
         logical_contracts: set[int] = set()
-        for source_key, state in self.controller.book.positions.source_states().items():
-            if state.quantity and state.contract is not None:
+        for signal_key, state in self.controller.book.positions.by_signal().items():
+            if state.filled_quantity and state.contract is not None:
                 logical_trade = self.controller.trade(
                     state.contract,
-                    _liquidation_order(state.quantity),
+                    _liquidation_order(state.filled_quantity),
                     role=StandardOrderRole.LIQUIDATION,
                     execution_model_name=state.execution_model_name,
-                    source_key=source_key,
+                    signal_key=signal_key,
                     position_id=state.position_id,
                 )
                 if logical_trade is not None:
@@ -72,10 +72,10 @@ class Reset:
                     submissions_accepted = False
                     log.critical(
                         "Reset liquidation suppressed: "
-                        "contract=%s source=%s quantity=%s",
+                        "contract=%s signal=%s quantity=%s",
                         state.contract,
-                        source_key,
-                        state.quantity,
+                        signal_key,
+                        state.filled_quantity,
                     )
 
         logical_filled = await self._wait_for_liquidations(self.in_progress_trades)
@@ -225,7 +225,7 @@ class EmergencyReset:
     def _close_positions(self) -> None:
         """Close cached broker positions through Controller's registered submission."""
         for position in self.controller.ib.positions():
-            states = self.controller.book.positions.source_states_for_contract(
+            states = self.controller.book.positions.signal_positions_for_contract(
                 position.contract
             )
             state = states[0] if len(states) == 1 else None
@@ -241,6 +241,6 @@ class EmergencyReset:
                     )
                     or "nuke_liquidation"
                 ),
-                source_key=state.source_key if state is not None else None,
+                signal_key=state.signal_key if state is not None else None,
                 position_id=state.position_id if state is not None else None,
             )

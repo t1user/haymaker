@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 class Blotter:
     """Collect optional trade reports after their commissions arrive.
 
-    Controller supplies each commission callback and source/episode attribution.
+    Controller supplies each commission callback and signal/position attribution.
     Reporting is independent of Book's authoritative order and Fill persistence;
     disabling the blotter never disables accounting or commission recovery.
 

@@ -19,13 +19,13 @@ import ib_insync as ibi
 
 from ... import misc
 from ...async_wrappers import create_background_task
+from ...enums import ExecutionMode
 from ...book import (
-    FutureRollMode,
     FutureRollStage,
     OrderInfo,
     RollParticipant,
     RollState,
-    TargetState,
+    ContractTarget,
 )
 from ...validators import finite_number, non_empty_string
 from ..messages import StandardOrderRole
@@ -43,31 +43,35 @@ class RollHolding:
 
     Args:
         contract: Concrete held Future.
-        quantity: Signed logical quantity held in that expiry.
+        filled_quantity: Signed filled quantity held in that expiry.
         execution_model_name: Target model that owns the logical state.
-        source_key: One-to-one source identity in bracket mode.
-        position_id: Optional one-to-one position episode.
+        signal_key: Signal execution signal identity in signal execution mode.
+        position_id: Optional signal execution position identity.
     """
 
     contract: ibi.Future
-    quantity: float
+    filled_quantity: float
     execution_model_name: str
-    source_key: str | None = None
+    signal_key: str | None = None
     position_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.contract, ibi.Future) or not self.contract.conId:
             raise ValueError("contract must be a qualified Future")
-        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
-        if not self.quantity:
-            raise ValueError("quantity must not be zero")
+        object.__setattr__(
+            self,
+            "filled_quantity",
+            finite_number(self.filled_quantity, "filled_quantity"),
+        )
+        if not self.filled_quantity:
+            raise ValueError("filled_quantity must not be zero")
         object.__setattr__(
             self,
             "execution_model_name",
             non_empty_string(self.execution_model_name, "execution_model_name"),
         )
-        if self.source_key is not None:
-            non_empty_string(self.source_key, "source_key")
+        if self.signal_key is not None:
+            non_empty_string(self.signal_key, "signal_key")
 
 
 class FutureRollExecutor(ABC):
@@ -83,7 +87,7 @@ class FutureRollExecutor(ABC):
     every advancement idempotent.
     """
 
-    mode: ClassVar[FutureRollMode]
+    mode: ClassVar[ExecutionMode]
 
     def __init__(self, *, name: str | None = None) -> None:
         self.name = non_empty_string(
@@ -177,7 +181,7 @@ class FutureRollExecutor(ABC):
 
     def _submit_roll(self, state: RollState, participant: RollParticipant) -> None:
         combo = self.make_combo(state.old_contract, state.new_contract)
-        identity = participant.source_key or str(state.old_contract.conId)
+        identity = participant.signal_key or str(state.old_contract.conId)
         params = {
             "roll_state_key": state.series_key,
             "old_contract": state.old_contract,
@@ -186,12 +190,12 @@ class FutureRollExecutor(ABC):
         trade = self.controller.trade(
             combo,
             ibi.MarketOrder(
-                "BUY" if participant.quantity > 0 else "SELL",
-                abs(participant.quantity),
+                "BUY" if participant.filled_quantity > 0 else "SELL",
+                abs(participant.filled_quantity),
             ),
             role=StandardOrderRole.ROLL,
             execution_model_name=self.name,
-            source_key=participant.source_key,
+            signal_key=participant.signal_key,
             position_id=participant.position_id,
             params=params,
         )
@@ -347,8 +351,8 @@ class FutureRollExecutor(ABC):
         self.completedEvent.emit(completed)
 
 
-class DirectFutureRollExecutor(FutureRollExecutor):
-    """Roll a concrete direct holding and durably transfer its absolute target.
+class ContractFutureRollExecutor(FutureRollExecutor):
+    """Roll a concrete contract holding and durably transfer its absolute target.
 
     Existing endpoint adjustments finish first. A saved post-roll target
     snapshot transfers the old target additively to the destination exactly
@@ -357,18 +361,22 @@ class DirectFutureRollExecutor(FutureRollExecutor):
     customize the target policy without replacing broker execution.
     """
 
-    mode = FutureRollMode.DIRECT
+    mode = ExecutionMode.CONTRACT
 
     def holdings(self) -> tuple[RollHolding, ...]:
         """Return each non-flat concrete Future with its current target owner."""
         result = []
-        for contract, quantity in self.book.positions.by_contract().items():
+        for contract, filled_quantity in self.book.positions.by_contract().items():
             state = self.book.targets.for_contract(contract)
-            if isinstance(contract, ibi.Future) and state is not None and quantity:
+            if (
+                isinstance(contract, ibi.Future)
+                and state is not None
+                and filled_quantity
+            ):
                 result.append(
                     RollHolding(
                         contract=contract,
-                        quantity=quantity,
+                        filled_quantity=filled_quantity,
                         execution_model_name=state.execution_model_name,
                     )
                 )
@@ -383,7 +391,9 @@ class DirectFutureRollExecutor(FutureRollExecutor):
     ) -> RollState:
         """Capture one concrete holding; other expiries are independent."""
         if len(holdings) != 1 or holdings[0].contract.conId != old_contract.conId:
-            raise ValueError("A direct roll requires exactly one old-Contract holding")
+            raise ValueError(
+                "A contract roll requires exactly one old-Contract holding"
+            )
         holding = holdings[0]
         return RollState(
             series_key=series_key,
@@ -394,26 +404,26 @@ class DirectFutureRollExecutor(FutureRollExecutor):
             participants=(
                 RollParticipant(
                     execution_model_name=holding.execution_model_name,
-                    quantity=holding.quantity,
+                    filled_quantity=holding.filled_quantity,
                 ),
             ),
         )
 
-    def target_transfers(self, state: RollState) -> tuple[TargetState, ...]:
+    def target_transfers(self, state: RollState) -> tuple[ContractTarget, ...]:
         """Capture default post-roll targets before submission.
 
         The old target becomes zero and is added to the destination's target.
         A custom executor may override this allocation policy. Return absolute
-        TargetStates; the executor saves them before any roll submission.
+        ContractTargets; the executor saves them before any roll submission.
         """
         old = self.book.targets.for_contract(state.old_contract)
         if old is None:
-            raise ValueError("Direct roll requires the old Contract's TargetState")
+            raise ValueError("Contract roll requires the old Contract's ContractTarget")
         new = self.book.targets.for_contract(state.new_contract)
         now = datetime.now(timezone.utc)
         return (
             replace(old, target_quantity=0, target_created_at=now, updated_at=now),
-            TargetState(
+            ContractTarget(
                 execution_model_name=(
                     new.execution_model_name if new else old.execution_model_name
                 ),
@@ -434,7 +444,7 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         if state.stage is FutureRollStage.ROLL_FILLED:
             info = self._roll_info(state)
             if info is None:
-                self._block(state, "Filled direct roll evidence is missing")
+                self._block(state, "Filled contract roll evidence is missing")
             else:
                 self._after_roll_fill(state, info.trade)
             return
@@ -442,7 +452,7 @@ class DirectFutureRollExecutor(FutureRollExecutor):
             FutureRollStage.PLANNED,
             FutureRollStage.WAITING_FOR_ACTIVE_WORK,
         }:
-            self._block(state, f"Unsupported direct roll stage {state.stage.value}")
+            self._block(state, f"Unsupported contract roll stage {state.stage.value}")
             return
         active = tuple(
             info
@@ -458,11 +468,11 @@ class DirectFutureRollExecutor(FutureRollExecutor):
             for info in active:
                 self._bind_adjustment(info.trade, state.series_key)
             return
-        quantity = self.book.positions.quantity(state.old_contract)
-        if not quantity:
+        filled_quantity = self.book.positions.filled_quantity(state.old_contract)
+        if not filled_quantity:
             self._complete(state)
             return
-        participant = replace(state.participants[0], quantity=quantity)
+        participant = replace(state.participants[0], filled_quantity=filled_quantity)
         planned = self.book.update_roll(
             replace(
                 state,
@@ -513,11 +523,11 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         current = self.book.rolls.for_series(state.series_key)
         if current is None or current.stage is not FutureRollStage.ROLL_FILLED:
             return
-        if self.book.positions.quantity(current.old_contract):
-            self._block(current, "Direct roll did not flatten its old Contract")
+        if self.book.positions.filled_quantity(current.old_contract):
+            self._block(current, "Contract roll did not flatten its old Contract")
             return
         if not current.target_transfers:
-            self._block(current, "Direct roll lacks durable target transfers")
+            self._block(current, "Contract roll lacks durable target transfers")
             return
         for target in current.target_transfers:
             # Book ignores older snapshots. Re-applying an identical absolute
@@ -526,44 +536,44 @@ class DirectFutureRollExecutor(FutureRollExecutor):
         self._complete(current)
 
 
-class BracketFutureRollExecutor(FutureRollExecutor):
-    """Roll one-to-one episodes and reinstall critical protection serially.
+class SignalFutureRollExecutor(FutureRollExecutor):
+    """Roll signal execution positions and reinstall critical protection serially.
 
     Args:
         name: Stable recovery identity. The class name is used when omitted.
 
-    Logical sources may offset inside the broker's net position. The executor
+    Logical signals may offset inside the broker's net position. The executor
     submits only the deterministic broker-net BAG work, applies a market spread
-    price to offset sources, and preserves each source and ``position_id``.
+    price to offset signals, and preserves each signal and ``position_id``.
     A participant is not complete until its replacement stop is confirmed
     active. Take-profit replacement is best effort and never substitutes for
     stop-loss protection.
     """
 
-    mode = FutureRollMode.BRACKET
+    mode = ExecutionMode.SIGNAL
 
     def __init__(self, *, name: str | None = None) -> None:
         super().__init__(name=name)
         self._reference_price_tasks: set[str] = set()
 
     def holdings(self) -> tuple[RollHolding, ...]:
-        """Return non-flat, roll-enabled one-to-one futures holdings."""
+        """Return non-flat, roll-enabled signal execution futures holdings."""
 
         holdings: list[RollHolding] = []
         policies = self.controller.future_roll_policies
-        for state in self.book.positions.source_states().values():
+        for state in self.book.positions.by_signal().values():
             if (
-                not state.quantity
+                not state.filled_quantity
                 or not isinstance(state.contract, ibi.Future)
-                or not policies.get(state.source_key, True)
+                or not policies.get(state.signal_key, True)
             ):
                 continue
             holdings.append(
                 RollHolding(
                     contract=state.contract,
-                    quantity=state.quantity,
+                    filled_quantity=state.filled_quantity,
                     execution_model_name=state.execution_model_name,
-                    source_key=state.source_key,
+                    signal_key=state.signal_key,
                     position_id=state.position_id,
                 )
             )
@@ -576,16 +586,16 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         new_contract: ibi.Future,
         holdings: Sequence[RollHolding],
     ) -> RollState:
-        """Create a source queue with only the broker-net subset traded."""
+        """Create a signal queue with only the broker-net subset traded."""
 
-        physical_sources = self._physical_sources(holdings)
+        physical_signals = self._physical_signals(holdings)
         participants = tuple(
             RollParticipant(
-                source_key=holding.source_key,
+                signal_key=holding.signal_key,
                 execution_model_name=holding.execution_model_name,
-                quantity=holding.quantity,
+                filled_quantity=holding.filled_quantity,
                 position_id=holding.position_id,
-                requires_trade=holding.source_key in physical_sources,
+                requires_trade=holding.signal_key in physical_signals,
             )
             for holding in holdings
         )
@@ -599,28 +609,28 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         )
 
     @staticmethod
-    def _physical_sources(
+    def _physical_signals(
         holdings: Sequence[RollHolding], *, total: float | None = None
     ) -> set[str | None]:
-        """Choose the smallest deterministic source subset equal to broker net."""
+        """Choose the smallest deterministic signal subset equal to broker net."""
 
         if total is None:
-            total = sum(holding.quantity for holding in holdings)
+            total = sum(holding.filled_quantity for holding in holdings)
         if not total:
             return set()
         for size in range(1, len(holdings) + 1):
             for selected in combinations(holdings, size):
                 if isclose(
-                    sum(holding.quantity for holding in selected),
+                    sum(holding.filled_quantity for holding in selected),
                     total,
                     rel_tol=0.0,
                     abs_tol=1e-12,
                 ):
-                    return {holding.source_key for holding in selected}
-        raise ValueError("Logical sources cannot be attributed to broker net")
+                    return {holding.signal_key for holding in selected}
+        raise ValueError("Logical signals cannot be attributed to broker net")
 
     def advance(self, state: RollState) -> None:
-        """Advance the current source through trade and protection stages."""
+        """Advance the current signal through trade and protection stages."""
 
         if state.terminal:
             return
@@ -650,14 +660,14 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             FutureRollStage.PLANNED,
             FutureRollStage.WAITING_FOR_ACTIVE_WORK,
         }:
-            self._block(state, f"Unsupported bracket roll stage {state.stage.value}")
+            self._block(state, f"Unsupported signal roll stage {state.stage.value}")
             return
         participant = state.current_participant
         if participant is None:
             self._complete(state)
             return
-        if participant.source_key is None:
-            self._block(state, "Bracket roll participant is missing source_key")
+        if participant.signal_key is None:
+            self._block(state, "Signal roll participant is missing signal_key")
             return
         refreshed = self._refresh_pending(state)
         if refreshed is None:
@@ -666,7 +676,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         participant = state.current_participant
         if participant is None:
             self._complete(state)
-        elif not participant.quantity:
+        elif not participant.filled_quantity:
             self._finish_participant(state)
         elif participant.requires_trade:
             self._submit_roll(state, participant)
@@ -674,18 +684,18 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             self._request_reference_price(state)
 
     def _refresh_pending(self, state: RollState) -> RollState | None:
-        """Reconcile all unprocessed episodes before planning any broker work.
+        """Reconcile all unprocessed positions before planning any broker work.
 
         Completed non-trading participants may offset remaining physical work.
         Preserve that offset when rebuilding the subset, not just the current
-        participant's quantity. Zero non-trading entries retain notification
-        attribution for episodes closed while waiting.
+        participant's filled_quantity. Zero non-trading entries retain notification
+        attribution for positions closed while waiting.
         """
         remaining = state.participants[state.participant_index :]
         active_work = tuple(
             info
             for participant in remaining
-            for info in self.book.orders.active(source_key=participant.source_key)
+            for info in self.book.orders.active(signal_key=participant.signal_key)
             if info.role in {StandardOrderRole.OPEN, StandardOrderRole.CLOSE}
         )
         if active_work:
@@ -701,9 +711,9 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             return None
         pending = []
         for participant in remaining:
-            position = self.book.positions.for_source(participant.source_key or "")
+            position = self.book.positions.for_signal(participant.signal_key or "")
             if position is None or (
-                position.quantity
+                position.filled_quantity
                 and (
                     position.position_id != participant.position_id
                     or position.contract != state.old_contract
@@ -711,37 +721,41 @@ class BracketFutureRollExecutor(FutureRollExecutor):
                 )
             ):
                 self._block(
-                    state, "Unprocessed source episode changed before roll submission"
+                    state, "Unprocessed signal position changed before roll submission"
                 )
                 return None
             pending.append(
-                replace(participant, quantity=position.quantity, requires_trade=False)
+                replace(
+                    participant,
+                    filled_quantity=position.filled_quantity,
+                    requires_trade=False,
+                )
             )
         completed = tuple(state.participants[: state.participant_index])
         holdings = tuple(
             RollHolding(
                 contract=state.old_contract,
-                quantity=p.quantity,
+                filled_quantity=p.filled_quantity,
                 execution_model_name=p.execution_model_name,
-                source_key=p.source_key,
+                signal_key=p.signal_key,
                 position_id=p.position_id,
             )
             for p in pending
-            if p.quantity
+            if p.filled_quantity
         )
-        net = sum(p.quantity for p in pending) + sum(
-            p.quantity for p in completed if not p.requires_trade
+        net = sum(p.filled_quantity for p in pending) + sum(
+            p.filled_quantity for p in completed if not p.requires_trade
         )
         try:
-            physical = self._physical_sources(holdings, total=net)
+            physical = self._physical_signals(holdings, total=net)
         except ValueError:
             self._block(
                 state,
-                "Changed source quantities cannot preserve completed roll offsets",
+                "Changed signal quantities cannot preserve completed roll offsets",
             )
             return None
         participants = completed + tuple(
-            replace(p, requires_trade=p.source_key in physical) for p in pending
+            replace(p, requires_trade=p.signal_key in physical) for p in pending
         )
         if (
             participants == state.participants
@@ -770,11 +784,11 @@ class BracketFutureRollExecutor(FutureRollExecutor):
         )
 
     def onAdjustmentFilledEvent(self, trade: ibi.Trade, series_key: str) -> None:
-        """Resume a waiting bracket roll after OPEN/CLOSE work fills."""
+        """Resume a waiting signal roll after OPEN/CLOSE work fills."""
         self._defer(self._resume_pending, series_key)
 
     def onAdjustmentCancelledEvent(self, trade: ibi.Trade, series_key: str) -> None:
-        """Resume a waiting bracket roll after OPEN/CLOSE work cancels."""
+        """Resume a waiting signal roll after OPEN/CLOSE work cancels."""
         self._defer(self._resume_pending, series_key)
 
     def _resume_pending(self, series_key: str) -> None:
@@ -841,32 +855,32 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             return
         state = current
         participant = state.current_participant
-        if participant is None or participant.source_key is None:
-            self._block(state, "Filled bracket roll has no source participant")
+        if participant is None or participant.signal_key is None:
+            self._block(state, "Filled signal roll has no signal participant")
             return
         if participant.requires_trade:
             info = self._roll_info(state)
             if info is None or not isclose(
                 self._signed_filled_quantity(info),
-                participant.quantity,
+                participant.filled_quantity,
                 rel_tol=0.0,
                 abs_tol=1e-12,
             ):
                 self._block(
                     state,
-                    "Bracket roll lacks complete normalized Fill evidence",
+                    "Signal roll lacks complete normalized Fill evidence",
                 )
                 return
-        position = self.book.positions.for_source(participant.source_key)
+        position = self.book.positions.for_signal(participant.signal_key)
         if (
             position is None
             or position.position_id != participant.position_id
-            or position.quantity != participant.quantity
+            or position.filled_quantity != participant.filled_quantity
         ):
-            self._block(state, "Source episode changed while roll was in flight")
+            self._block(state, "Signal position changed while roll was in flight")
             return
         if position.contract is None:
-            self._block(state, "Source position has no held Contract")
+            self._block(state, "Signal position has no held Contract")
             return
         if position.contract.conId == state.old_contract.conId:
             self.book.update_position(
@@ -877,11 +891,11 @@ class BracketFutureRollExecutor(FutureRollExecutor):
                 )
             )
         elif position.contract.conId != state.new_contract.conId:
-            self._block(state, "Source position moved to an unexpected Contract")
+            self._block(state, "Signal position moved to an unexpected Contract")
             return
         protections = tuple(
             info
-            for info in self.book.orders.active(source_key=participant.source_key)
+            for info in self.book.orders.active(signal_key=participant.signal_key)
             if info.role in {StandardOrderRole.STOP_LOSS, StandardOrderRole.TAKE_PROFIT}
         )
         if not any(info.role == StandardOrderRole.STOP_LOSS for info in protections):
@@ -989,7 +1003,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             order,
             role=StandardOrderRole.STOP_LOSS,
             execution_model_name=participant.execution_model_name,
-            source_key=participant.source_key,
+            signal_key=participant.signal_key,
             position_id=participant.position_id,
             params=params,
         )
@@ -1036,7 +1050,7 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             (
                 info
                 for info in self.book.orders.query(
-                    source_key=participant.source_key,
+                    signal_key=participant.signal_key,
                     contract=state.new_contract,
                     role=role,
                 )
@@ -1111,14 +1125,14 @@ class BracketFutureRollExecutor(FutureRollExecutor):
             order,
             role=StandardOrderRole.TAKE_PROFIT,
             execution_model_name=participant.execution_model_name,
-            source_key=participant.source_key,
+            signal_key=participant.signal_key,
             position_id=participant.position_id,
             params=params,
         )
         if trade is None:
             log.warning(
-                "Optional take-profit replacement failed for source %s",
-                participant.source_key,
+                "Optional take-profit replacement failed for signal %s",
+                participant.signal_key,
             )
             self._finish_participant(pending)
             return
@@ -1226,10 +1240,9 @@ class BracketFutureRollExecutor(FutureRollExecutor):
 
 
 __all__ = [
-    "BracketFutureRollExecutor",
-    "DirectFutureRollExecutor",
+    "SignalFutureRollExecutor",
+    "ContractFutureRollExecutor",
     "FutureRollExecutor",
-    "FutureRollMode",
     "FutureRollStage",
     "RollHolding",
     "RollParticipant",

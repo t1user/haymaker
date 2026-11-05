@@ -18,6 +18,7 @@ import ib_insync as ibi
 from haymaker import misc
 from haymaker.base import Atom
 from haymaker.book import OrderInfo
+from haymaker.enums import ExecutionMode
 from haymaker.components.messages import PositionTarget, StandardOrderRole
 from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
 from haymaker.trader import Trader
@@ -56,14 +57,14 @@ class Controller(Atom):
     """Own broker order submission, fill accounting, and reconciliation.
 
     ExecutionModels call :meth:`trade` with explicit role, stable model name,
-    and optional one-to-one attribution. Controller registers complete Trade
+    and optional signal execution attribution. Controller registers complete Trade
     evidence in Book immediately after broker submission, applies Fill and
     commission callbacks, writes the Book-owned blotter, and verifies accepted
     absolute targets after a delay.
 
     ``position_mismatch_policy`` defaults to ``"fail"``: unexplained broker
     position differences disable trading without rewriting Book positions.
-    ``"correct"`` opts into inferred one-to-one position/target corrections.
+    ``"correct"`` opts into inferred signal execution position/target corrections.
     """
 
     trader: Trader
@@ -112,6 +113,7 @@ class Controller(Atom):
     _protection_recovery: dict[str, Callable[[], None]] = field(
         default_factory=dict, init=False, repr=False
     )
+    _execution_mode: ExecutionMode | None = field(default=None, init=False, repr=False)
     future_roller: FutureRoller = field(init=False, repr=False)
 
     @classmethod
@@ -177,6 +179,26 @@ class Controller(Atom):
             f"missing_brackets={self.missing_brackets}>"
         )
 
+    @property
+    def execution_mode(self) -> ExecutionMode | None:
+        """Return the mode established by the first model, or None before registration."""
+        return self._execution_mode
+
+    def register_execution_mode(self, mode: ExecutionMode) -> None:
+        """Require all execution models on this Controller to manage the same scope.
+
+        Args:
+            mode: The mode declared by the model being constructed.
+        """
+        if not isinstance(mode, ExecutionMode):
+            raise TypeError("ExecutionModel.mode must be an ExecutionMode")
+        if self._execution_mode is not None and self._execution_mode is not mode:
+            raise ValueError(
+                f"Cannot register {mode.value} execution: "
+                f"Controller already uses {self._execution_mode.value} execution"
+            )
+        self._execution_mode = mode
+
     def onStart(self, data: Any, source: Atom | None = None) -> None:
         """Ignore graph startup because Controller lifecycle is runtime-owned."""
 
@@ -195,23 +217,23 @@ class Controller(Atom):
         if await self.verify_target_integrity(target, execution_model_name):
             contracts = (
                 (target.contract,)
-                if target.source_key is None
-                else self._episode_contracts(target)
+                if target.signal_key is None
+                else self._position_contracts(target)
             )
             for contract in contracts or (target.contract,):
                 self.verify_position_with_broker(contract)
 
-    def _episode_contracts(self, target: PositionTarget) -> tuple[ibi.Contract, ...]:
+    def _position_contracts(self, target: PositionTarget) -> tuple[ibi.Contract, ...]:
         """Verify held execution identity, not a CLOSE message's destination."""
         state = (
-            self.book.positions.for_source(target.source_key)
-            if target.source_key is not None
+            self.book.positions.for_signal(target.signal_key)
+            if target.signal_key is not None
             else None
         )
         return (state.contract,) if state is not None and state.contract else ()
 
     def set_health_check(self, func: Callable[[], bool]) -> None:
-        """Register a health check; report each failure episode independently."""
+        """Register a health check; report each failure occurrence independently."""
         if not callable(func):
             raise TypeError("health check must be callable")
         self._health_check_functions.append(func)
@@ -278,37 +300,37 @@ class Controller(Atom):
         )
 
     def set_future_roll_policies(self, policies: Mapping[str, bool]) -> None:
-        """Install the one-to-one source policies collected during composition."""
+        """Install the signal execution policies collected during composition."""
 
         self.future_roll_policies = dict(policies)
         self.future_roller.set_policies(self.future_roll_policies)
 
     def register_protection_recovery(
-        self, source_key: str, callback: Callable[[], None]
+        self, signal_key: str, callback: Callable[[], None]
     ) -> None:
-        """Register one model-owned initial-protection recovery hook per source.
+        """Register one model-owned initial-protection recovery hook per signal.
 
         Framework plumbing calls these only after broker evidence and positions
         are reconciled, before missing-bracket remediation. Hooks must be
         repeat-safe and must not perform ordinary target convergence.
         """
-        previous = self._protection_recovery.get(source_key)
+        previous = self._protection_recovery.get(signal_key)
         if previous is not None and previous != callback:
             raise ValueError(
-                f"Protection recovery already registered for {source_key!r}"
+                f"Protection recovery already registered for {signal_key!r}"
             )
-        self._protection_recovery[source_key] = callback
+        self._protection_recovery[signal_key] = callback
 
     def recover_protection(self) -> None:
         """Give models a repair opportunity before missing-bracket remediation."""
         if self.reset or self.zero or self.nuke or self._trading_disabled:
             return
-        for source_key, callback in self._protection_recovery.items():
+        for signal_key, callback in self._protection_recovery.items():
             try:
                 callback()
             except Exception as exc:
                 raise SyncBrokenStateError(
-                    f"Initial bracket recovery failed for {source_key!r}: {exc}"
+                    f"Initial bracket recovery failed for {signal_key!r}: {exc}"
                 ) from exc
 
     async def run(self) -> SyncOutcome:
@@ -469,7 +491,7 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
-        source_key: str | None = None,
+        signal_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
     ) -> ibi.Trade | None:
@@ -477,7 +499,7 @@ class Controller(Atom):
 
         self._validate_order_attribution(
             role=str(role),
-            source_key=source_key,
+            signal_key=signal_key,
         )
         if self._trading_disabled:
             log.debug(
@@ -488,7 +510,7 @@ class Controller(Atom):
             )
             return None
         if role == StandardOrderRole.OPEN and self._new_position_lock:
-            log.debug("New-position lock suppressed trade for %s", source_key)
+            log.debug("New-position lock suppressed trade for %s", signal_key)
             return None
         if not self.book.verify_for_rejections(execution_model_name):
             return None
@@ -499,7 +521,7 @@ class Controller(Atom):
             order,
             role=role,
             execution_model_name=execution_model_name,
-            source_key=source_key,
+            signal_key=signal_key,
             position_id=position_id,
             params=params,
         )
@@ -511,7 +533,7 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
-        source_key: str | None = None,
+        signal_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
     ) -> ibi.Trade:
@@ -524,12 +546,12 @@ class Controller(Atom):
             role=role,
             submitted_at=datetime.datetime.now(datetime.timezone.utc),
             execution_model_name=execution_model_name,
-            source_key=source_key,
+            signal_key=signal_key,
             position_id=position_id,
             params={} if params is None else params,
         )
         self._validate_order_attribution(
-            role=metadata.role, source_key=metadata.source_key
+            role=metadata.role, signal_key=metadata.signal_key
         )
         if (
             order.account
@@ -543,14 +565,14 @@ class Controller(Atom):
             trade,
             role=metadata.role,
             execution_model_name=metadata.execution_model_name,
-            source_key=metadata.source_key,
+            signal_key=metadata.signal_key,
             position_id=metadata.position_id,
             params=metadata.params,
         )
         trade.filledEvent += partial(
             self.log_trade,
             reason=str(role),
-            source_key=source_key or execution_model_name,
+            signal_key=signal_key or execution_model_name,
         )
         return trade
 
@@ -560,7 +582,7 @@ class Controller(Atom):
         *,
         role: str,
         execution_model_name: str,
-        source_key: str | None = None,
+        signal_key: str | None = None,
         position_id: str | None = None,
         params: Mapping[str, Any] | None = None,
     ) -> OrderInfo:
@@ -571,7 +593,7 @@ class Controller(Atom):
             role=role,
             submitted_at=datetime.datetime.now(datetime.timezone.utc),
             execution_model_name=execution_model_name,
-            source_key=source_key,
+            signal_key=signal_key,
             position_id=position_id,
             params={} if params is None else params,
         )
@@ -586,10 +608,10 @@ class Controller(Atom):
         return info
 
     @staticmethod
-    def _validate_order_attribution(*, role: str, source_key: str | None) -> None:
-        """Reserve direct adjustment attribution for concrete account targets."""
-        if role == StandardOrderRole.TARGET_ADJUSTMENT and source_key is not None:
-            raise ValueError("TARGET_ADJUSTMENT must not have source_key")
+    def _validate_order_attribution(*, role: str, signal_key: str | None) -> None:
+        """Reserve contract adjustment attribution for concrete account targets."""
+        if role == StandardOrderRole.TARGET_ADJUSTMENT and signal_key is not None:
+            raise ValueError("TARGET_ADJUSTMENT must not have signal_key")
 
     def verify_market_open(self, contract: ibi.Contract) -> bool:
         details = self.contract_registry.get_details(contract)
@@ -695,7 +717,7 @@ class Controller(Atom):
         if blotter is None:
             return
         kwargs = {
-            "source_key": info.source_key,
+            "signal_key": info.signal_key,
             "position_id": info.position_id,
             "role": info.role,
             "execution_model_name": info.execution_model_name,
@@ -720,8 +742,8 @@ class Controller(Atom):
         if not self._target_is_latest(target, execution_model_name):
             return False
         while self._active_target_orders(target, execution_model_name) or (
-            self.book.rolls.for_source(target.source_key)
-            if target.source_key is not None
+            self.book.rolls.for_signal(target.signal_key)
+            if target.signal_key is not None
             else self.book.rolls.for_contract(target.contract)
         ):
             if retries >= self.execution_verification_max_retries:
@@ -733,19 +755,19 @@ class Controller(Atom):
         if not self._target_is_latest(target, execution_model_name):
             return False
         position = (
-            self.book.positions.for_source(target.source_key)
-            if target.source_key is not None
+            self.book.positions.for_signal(target.signal_key)
+            if target.signal_key is not None
             else None
         )
         actual = (
-            position.quantity
+            position.filled_quantity
             if position is not None
-            else (self.book.positions.quantity(target.contract))
+            else (self.book.positions.filled_quantity(target.contract))
         )
         if actual != target.target_quantity:
             log.error(
                 "Target not achieved for %s: target=%s actual=%s",
-                target.source_key or target.contract.localSymbol,
+                target.signal_key or target.contract.localSymbol,
                 target.target_quantity,
                 actual,
             )
@@ -761,14 +783,14 @@ class Controller(Atom):
             StandardOrderRole.CLOSE,
             StandardOrderRole.TARGET_ADJUSTMENT,
         }
-        if target.source_key is None:
+        if target.signal_key is None:
             orders = self.book.orders.active(
                 contract=target.contract,
                 execution_model_name=execution_model_name,
             )
         else:
             orders = self.book.orders.active(
-                source_key=target.source_key,
+                signal_key=target.signal_key,
                 execution_model_name=execution_model_name,
             )
         return tuple(info for info in orders if info.role in roles)
@@ -778,15 +800,15 @@ class Controller(Atom):
     ) -> bool:
         """Return whether Book still identifies this exact accepted setpoint."""
 
-        if target.source_key is not None:
-            position_state = self.book.positions.for_source(target.source_key)
+        if target.signal_key is not None:
+            signal_target = self.book.targets.for_signal(target.signal_key)
             return (
-                position_state is not None
-                and position_state.execution_model_name == execution_model_name
-                and position_state.target_contract is not None
-                and position_state.target_contract.conId == target.contract.conId
-                and position_state.target_quantity == target.target_quantity
-                and position_state.target_created_at == target.created_at
+                signal_target is not None
+                and signal_target.execution_model_name == execution_model_name
+                and signal_target.contract is not None
+                and signal_target.contract.conId == target.contract.conId
+                and signal_target.target_quantity == target.target_quantity
+                and signal_target.target_created_at == target.created_at
             )
         target_state = self.book.targets.for_contract(target.contract)
         return (
@@ -800,7 +822,7 @@ class Controller(Atom):
     def verify_position_with_broker(self, contract: ibi.Contract) -> None:
         """Compare aggregate logical Book quantity with the broker position."""
 
-        logical = self.book.positions.quantity(contract)
+        logical = self.book.positions.filled_quantity(contract)
         broker = self.trader.position_for_contract(contract)
         if logical != broker:
             log.error(
@@ -810,14 +832,14 @@ class Controller(Atom):
                 broker,
             )
 
-    def _source_for_unknown_trade(self, trade: ibi.Trade) -> str | None:
+    def _signal_for_unknown_trade(self, trade: ibi.Trade) -> str | None:
         """Attribute an unknown trade only when one logical position is clear."""
 
         if not trade.contract.conId:
             return None
-        states = self.book.positions.source_states_for_contract(trade.contract)
+        states = self.book.positions.signal_positions_for_contract(trade.contract)
         if len(states) == 1:
-            return states[0].source_key
+            return states[0].signal_key
         return None
 
     def _unknown_order_info(
@@ -828,10 +850,10 @@ class Controller(Atom):
     ) -> OrderInfo:
         if not trade.order.orderId:
             raise ValueError("Cannot register unknown Trade with orderId 0")
-        source_key = self._source_for_unknown_trade(trade)
+        signal_key = self._signal_for_unknown_trade(trade)
         state = (
-            self.book.positions.for_source(source_key)
-            if source_key is not None
+            self.book.positions.for_signal(signal_key)
+            if signal_key is not None
             else None
         )
         return OrderInfo(
@@ -841,7 +863,7 @@ class Controller(Atom):
             execution_model_name=(
                 state.execution_model_name if state is not None else str(role).lower()
             ),
-            source_key=source_key,
+            signal_key=signal_key,
             position_id=state.position_id if state is not None else None,
         )
 
@@ -869,32 +891,32 @@ class Controller(Atom):
         log.critical("Unknown broker trade: %s", trade)
         return self.book.save_order(self._unknown_order_info(trade))
 
-    def cancel_orders_for_source(self, source_key: str) -> None:
-        """Cancel every working order attributed to one source."""
+    def cancel_orders_for_signal(self, signal_key: str) -> None:
+        """Cancel every working order attributed to one signal."""
 
-        for info in self.book.orders.active(source_key=source_key):
+        for info in self.book.orders.active(signal_key=signal_key):
             self.cancel(info.trade)
 
-    def close_position_for_source(
-        self, source_key: str, role: str = StandardOrderRole.LIQUIDATION
+    def close_position_for_signal(
+        self, signal_key: str, role: str = StandardOrderRole.LIQUIDATION
     ) -> None:
-        """Submit one attributed market order to flatten a logical source."""
+        """Submit one attributed market order to flatten a signal position."""
 
-        state = self.book.positions.for_source(source_key)
-        if state is None or not state.quantity or state.contract is None:
-            log.error("Attempt to close zero or unknown source %s", source_key)
+        state = self.book.positions.for_signal(signal_key)
+        if state is None or not state.filled_quantity or state.contract is None:
+            log.error("Attempt to close zero or unknown signal %s", signal_key)
             return
         exits = tuple(
             info.trade
-            for info in self.book.orders.active(source_key=source_key)
+            for info in self.book.orders.active(signal_key=signal_key)
             if info.role in {StandardOrderRole.STOP_LOSS, StandardOrderRole.TAKE_PROFIT}
         )
-        action = "BUY" if state.quantity < 0 else "SELL"
+        action = "BUY" if state.filled_quantity < 0 else "SELL"
         for trade in exits:
             if (
                 trade.contract != state.contract
                 or trade.order.action != action
-                or trade.remaining() != abs(state.quantity)
+                or trade.remaining() != abs(state.filled_quantity)
                 or not trade.order.ocaGroup
                 or trade.order.ocaType not in {1, 2, 3}
             ):
@@ -902,7 +924,7 @@ class Controller(Atom):
                 if not trade.isDone():
                     raise SyncBrokenStateError(
                         "Unsafe protective exit cancellation unconfirmed for "
-                        f"{source_key!r}"
+                        f"{signal_key!r}"
                     )
         groups = {
             (trade.order.ocaGroup, trade.order.ocaType)
@@ -911,7 +933,7 @@ class Controller(Atom):
         }
         if len(groups) > 1:
             raise SyncBrokenStateError(
-                f"Conflicting protective OCA groups for {source_key!r}"
+                f"Conflicting protective OCA groups for {signal_key!r}"
             )
         options = {}
         if groups:
@@ -921,12 +943,12 @@ class Controller(Atom):
             state.contract,
             ibi.MarketOrder(
                 action,
-                abs(state.quantity),
+                abs(state.filled_quantity),
                 **options,
             ),
             role=role,
             execution_model_name=state.execution_model_name,
-            source_key=source_key,
+            signal_key=signal_key,
             position_id=state.position_id,
         )
 
@@ -973,7 +995,7 @@ class Controller(Atom):
             )
 
     @staticmethod
-    def log_trade(trade: ibi.Trade, reason: str = "", source_key: str = "") -> None:
+    def log_trade(trade: ibi.Trade, reason: str = "", signal_key: str = "") -> None:
         log.info(
             "%s trade filled: %s %s %s@%s --> %s orderId=%s permId=%s",
             reason,
@@ -981,7 +1003,7 @@ class Controller(Atom):
             trade.order.action,
             trade.filled(),
             misc.trade_fill_price(trade),
-            source_key,
+            signal_key,
             trade.order.orderId,
             trade.order.permId,
         )

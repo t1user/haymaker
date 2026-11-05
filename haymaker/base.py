@@ -36,20 +36,20 @@ class ContractManagingDescriptor:
     # that inherit from Atom
     """Resolve an Atom's assigned contract through the runtime registry.
 
-    Assignment registers an unqualified contract blueprint. Instance access
+    Assignment registers an unqualified contract specification. Instance access
     returns the registry's currently selected concrete contract for the
     configured ACTIVE or NEXT futures role. PREVIOUS remains available for
     direct selector and registry queries, but is not an operational Atom role.
     """
 
     def __set_name__(self, obj: type[Atom], name: str) -> None:
-        self.name = f"_{name}_blueprint"
+        self.name = f"_{name}_spec"
 
     def __set__(self, obj: Atom, value: ibi.Contract) -> None:
         if not isinstance(value, ibi.Contract):
             raise TypeError(f"attr contract must be ibi.Contract, not: {type(value)}")
         obj.__dict__[self.name] = deepcopy(value)
-        obj.contract_registry.register_blueprint(value)
+        obj.contract_registry.register_contract_spec(value)
 
     @overload
     def __get__(self, obj: None, owner: type[Atom] | None = None) -> Self: ...
@@ -64,8 +64,8 @@ class ContractManagingDescriptor:
     ) -> Self | ibi.Contract | None:
         if obj is None:
             return self
-        contract_blueprint = obj.__dict__.get(self.name)
-        if contract_blueprint is None:
+        contract_spec = obj.__dict__.get(self.name)
+        if contract_spec is None:
             return None
         which_contract = obj.which_contract
         if which_contract not in (ActiveNext.ACTIVE, ActiveNext.NEXT):
@@ -74,13 +74,10 @@ class ContractManagingDescriptor:
                 f"not {which_contract}"
             )
         try:
-            return obj.contract_registry.get_contract(
-                contract_blueprint, which_contract
-            )
+            return obj.contract_registry.get_contract(contract_spec, which_contract)
         except KeyError:
             raise MissingContractError(
-                f"Unknown contract: {contract_blueprint} on "
-                f"{obj.__class__.__name__}"
+                f"Unknown contract: {contract_spec} on " f"{obj.__class__.__name__}"
             )
 
 
@@ -125,9 +122,9 @@ class Atom:
         feedbackEvent (eventkit.event.Event): Reverse-direction feedback event. The
             base :meth:`onFeedback` emits the supplied payload unchanged.
         contract (ib_insync.contract.Contract | None): Optional contract associated with
-            this component. Assignment registers the unqualified blueprint;
+            this component. Assignment registers the unqualified contract_spec;
             access asks :attr:`contract_registry` for its current resolution.
-            Before startup this may still be the blueprint; after qualification
+            Before startup this may still be the contract_spec; after qualification
             it is the selected concrete Contract. Components unrelated to a
             single instrument should leave it unset.
         which_contract (haymaker.enums.ActiveNext): Futures role returned by :attr:`contract`.
@@ -145,7 +142,7 @@ class Atom:
             These normally become available during startup. Missing details
             produce an empty ``Details`` value and an error log.
         contract_selector (haymaker.contract_selector.AbstractBaseContractSelector): Selector registered
-            for the contract blueprint. Access raises until a contract has been
+            for the contract specification. Access raises until a contract has been
             assigned and its selector initialized by the runtime.
 
     Note:
@@ -162,7 +159,7 @@ class Atom:
         * ``onContractChanged(old_contract, new_contract)`` reacts when the
           resolved contract changes; Controller remains responsible for rolling
           held positions.
-        * ``contract_blueprint`` returns a copy of the assigned declaration,
+        * ``contract_spec`` returns a copy of the assigned declaration,
           independent of current ACTIVE/NEXT selection. ``contract_selector``
           exposes its initialized chain and Contract-selection operations.
         * ``validate_source(source)`` returns normally for a compatible
@@ -214,7 +211,7 @@ class Atom:
     contract = ContractManagingDescriptor()
     # these should be overriden by instances if neccessary to change
     which_contract: ActiveNext = ActiveNext.ACTIVE
-    _contract_blueprint: ibi.Contract | None = None
+    _contract_spec: ibi.Contract | None = None
 
     @classmethod
     def set_runtime_context(cls, runtime: RuntimeContext) -> None:
@@ -273,38 +270,38 @@ class Atom:
         return details
 
     @property
-    def contract_blueprint(self) -> ibi.Contract:
+    def contract_spec(self) -> ibi.Contract:
         """Return the assigned Contract declaration, independently of ACTIVE/NEXT.
 
         A copy prevents callers or broker qualification from mutating the
-        registered identity. Pass this declaration to a custom direct
+        registered identity. Pass this declaration to a custom contract execution
         Portfolio when it should select a concrete Contract itself.
 
         Raises:
             KeyError: If this Atom has no assigned Contract.
         """
-        if self._contract_blueprint is None:
+        if self._contract_spec is None:
             raise KeyError(f"Contract not set on {type(self).__name__}")
-        return deepcopy(self._contract_blueprint)
+        return deepcopy(self._contract_spec)
 
     @property
     def contract_selector(self) -> AbstractBaseContractSelector:
-        """Return the selector registered for this Atom's contract blueprint.
+        """Return the selector registered for this Atom's contract specification.
 
         Raises:
             KeyError: If no contract has been assigned to this Atom.
             RuntimeError: If the runtime has not initialized the assigned
                 contract's selector.
         """
-        if self._contract_blueprint is None:
+        if self._contract_spec is None:
             raise KeyError(
                 f"contract_selector not available because contract not set on {self}"
             )
-        selector = self.contract_registry.get_selector(self._contract_blueprint)
+        selector = self.contract_registry.get_selector(self._contract_spec)
         if selector is None:
             raise RuntimeError(
                 "Contract selector not initialized for "
-                f"{self._contract_blueprint} on {type(self).__name__}"
+                f"{self._contract_spec} on {type(self).__name__}"
             )
         return selector
 
@@ -399,7 +396,7 @@ class Atom:
     def connect(self, *targets: Atom) -> Self:
         """Connect this Atom directly to one or more targets.
 
-        Every target validates this source before any connection changes.
+        Every target validates this signal before any connection changes.
         ``+=`` is an alias. Use ``pipe`` for a linear multi-stage chain.
 
         Args:
@@ -412,7 +409,7 @@ class Atom:
             TypeError: If a target is not an Atom.
             Exception: Propagates any incompatibility raised by a target's
                 :meth:`validate_source`. No connection is changed unless every
-                target accepts this source.
+                target accepts this signal.
         """
         for target in targets:
             if not isinstance(target, Atom):

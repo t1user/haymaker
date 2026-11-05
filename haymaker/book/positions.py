@@ -1,4 +1,4 @@
-"""Source episodes and shared concrete-contract position accounting."""
+"""Signal positions and shared concrete-contract position accounting."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import ib_insync as ibi
 
+from ..enums import ExecutionMode
 from ..misc import decode_tree, tree
 from ..validators import (
     aware_datetime,
@@ -23,261 +24,427 @@ from types import MappingProxyType
 from uuid import uuid4
 from ..saver import AbstractBaseSaver
 from .persistence import utc_now, PersistenceWriter
-from .rolls import RollState, FutureRollMode, FutureRollStage
+from .rolls import RollState, FutureRollStage
+from .schema import require_schema
 from .orders import FillRecord, OrderInfo, fill_direction
 
 
 @dataclass(frozen=True, kw_only=True)
-class PositionState:
-    """Recover an episode separately from its latest accepted target.
+class SignalPosition:
+    """Filled exposure attributed to one stable signal stream.
 
-    ``contract`` and ``bracket_inputs`` belong to the holding or submitted
-    entry. ``target_contract`` and ``target_bracket_inputs`` belong to the
-    pending opening destination; accepting a reversal must not change the
-    Contract or protection inputs of the episode being closed.
+    A pending or flat position can have no Contract or position ID. The ID is
+    retained through rolling and replaced on the next independently managed opening.
+
+    Args:
+        signal_key: Stable named stream, preserved across openings.
+        execution_model_name: Execution owner used for recovery.
+        contract: Held or pending-entry contract, independent of the next target.
+        filled_quantity: Signed remaining filled exposure, excluding working orders.
+        position_id: Identity of this opening, retained through rolling.
+        updated_at: Time of the last accounting state update.
     """
 
-    source_key: str
+    signal_key: str
     execution_model_name: str
     contract: ibi.Contract | None = None
-    quantity: float = 0.0
-    target_quantity: float | None = None
-    target_created_at: datetime | None = None
-    target_contract: ibi.Contract | None = None
-    target_bracket_inputs: Mapping[str, Any] = field(default_factory=dict)
+    filled_quantity: float = 0.0
     position_id: str | None = None
-    blocked_direction: Literal[-1, 1] | None = None
-    bracket_inputs: Mapping[str, Any] = field(default_factory=dict)
     updated_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        non_empty_string(self.signal_key, "signal_key")
+        non_empty_string(self.execution_model_name, "execution_model_name")
+        if self.contract is not None:
+            ib_contract(self.contract)
+        object.__setattr__(
+            self,
+            "filled_quantity",
+            finite_number(self.filled_quantity, "filled_quantity"),
+        )
+        aware_datetime(self.updated_at, "updated_at")
+
+
+@dataclass(frozen=True, kw_only=True)
+class SignalTarget:
+    """Accepted desired exposure and inputs for the next signal opening.
+
+    ``contract`` is the opening destination. Closing uses SignalPosition.contract;
+    a reversal must leave that holding and its ProtectionState unchanged.
+
+    Args:
+        signal_key: Stable signal whose desired exposure is accepted.
+        execution_model_name: Owner responsible for converging this target.
+        target_quantity: Absolute signed desired quantity.
+        target_created_at: Accepted message time; absent for untimed recovered state.
+        contract: Destination for the next opening; may be absent when cleared.
+        protection_inputs: Saved inputs for that opening, separate from held protection.
+    """
+
+    signal_key: str
+    execution_model_name: str
+    target_quantity: float
+    target_created_at: datetime | None = None
+    contract: ibi.Contract | None = None
+    protection_inputs: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        non_empty_string(self.signal_key, "signal_key")
+        non_empty_string(self.execution_model_name, "execution_model_name")
+        object.__setattr__(
+            self,
+            "target_quantity",
+            finite_number(self.target_quantity, "target_quantity"),
+        )
+        if self.target_created_at is not None:
+            aware_datetime(self.target_created_at, "target_created_at")
+        if self.contract is not None:
+            ib_contract(self.contract)
+        object.__setattr__(
+            self,
+            "protection_inputs",
+            readonly_mapping(self.protection_inputs, "protection_inputs"),
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProtectionState:
+    """Saved protection inputs for the current signal position.
+
+    Protective order status and fills remain authoritative in Book.orders.
+
+    Args:
+        signal_key: Signal owning the current position.
+        position_id: Position identity to which these inputs belong.
+        protection_inputs: Saved inputs used to build that position's protection.
+    """
+
+    signal_key: str
+    position_id: str | None
+    protection_inputs: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        non_empty_string(self.signal_key, "signal_key")
+        object.__setattr__(
+            self,
+            "protection_inputs",
+            readonly_mapping(self.protection_inputs, "protection_inputs"),
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class SignalExecutionState:
+    """Coordinate immutable records, direction blocking and a shared fill checkpoint.
+
+    This recovery envelope is internal. All records are replaced together and
+    serialized into one flat document; public queries expose only their own scope.
+    """
+
+    position: SignalPosition
+    protection: ProtectionState
+    target: SignalTarget | None = None
+    blocked_direction: Literal[-1, 1] | None = None
     _applied_fill_keys: frozenset[str] = field(default_factory=frozenset, repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "_applied_fill_keys", frozenset(self._applied_fill_keys)
         )
-        object.__setattr__(
-            self, "source_key", non_empty_string(self.source_key, "source_key")
-        )
-        object.__setattr__(
-            self,
-            "execution_model_name",
-            non_empty_string(self.execution_model_name, "execution_model_name"),
-        )
-        if self.contract is not None:
-            ib_contract(self.contract)
-        if self.target_contract is not None:
-            ib_contract(self.target_contract)
-        object.__setattr__(
-            self,
-            "target_bracket_inputs",
-            readonly_mapping(self.target_bracket_inputs, "target_bracket_inputs"),
-        )
-        if isinstance(self.blocked_direction, bool) or (
-            self.blocked_direction not in (None, -1, 1)
+        if isinstance(self.blocked_direction, bool) or self.blocked_direction not in (
+            None,
+            -1,
+            1,
         ):
             raise ValueError("blocked_direction must be None, -1, or 1")
-        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
-        if self.target_quantity is not None:
-            object.__setattr__(
-                self,
-                "target_quantity",
-                finite_number(self.target_quantity, "target_quantity"),
-            )
-        if self.target_created_at is not None:
-            aware_datetime(self.target_created_at, "target_created_at")
-        aware_datetime(self.updated_at, "updated_at")
-        object.__setattr__(
-            self,
-            "bracket_inputs",
-            readonly_mapping(self.bracket_inputs, "bracket_inputs"),
+        if (
+            self.protection.signal_key != self.position.signal_key
+            or self.protection.position_id != self.position.position_id
+        ):
+            raise ValueError("Protection must identify the current signal position")
+        if self.target is not None and (
+            self.target.signal_key != self.position.signal_key
+            or self.target.execution_model_name != self.position.execution_model_name
+        ):
+            raise ValueError("Signal position and target must share attribution")
+
+    @property
+    def signal_key(self) -> str:
+        return self.position.signal_key
+
+    @property
+    def execution_model_name(self) -> str:
+        return self.position.execution_model_name
+
+    @property
+    def contract(self) -> ibi.Contract | None:
+        return self.position.contract
+
+    @property
+    def filled_quantity(self) -> float:
+        return self.position.filled_quantity
+
+    @property
+    def position_id(self) -> str | None:
+        return self.position.position_id
+
+    @property
+    def updated_at(self) -> datetime:
+        return self.position.updated_at
+
+    @property
+    def protection_inputs(self) -> Mapping[str, Any]:
+        return self.protection.protection_inputs
+
+    @property
+    def target_quantity(self) -> float | None:
+        return self.target.target_quantity if self.target is not None else None
+
+    @property
+    def target_created_at(self) -> datetime | None:
+        return self.target.target_created_at if self.target is not None else None
+
+    @property
+    def target_contract(self) -> ibi.Contract | None:
+        return self.target.contract if self.target is not None else None
+
+    @property
+    def target_protection_inputs(self) -> Mapping[str, Any]:
+        return (
+            self.target.protection_inputs
+            if self.target is not None
+            else MappingProxyType({})
         )
 
-    def with_fill(self, info: OrderInfo, record: FillRecord) -> PositionState | None:
-        """Return the episode after one unapplied fill, or None for a duplicate."""
+    def with_fill(
+        self, info: OrderInfo, record: FillRecord
+    ) -> SignalExecutionState | None:
+        """Apply one fill and all its dependent effects within the same checkpoint."""
         if record.deduplication_key in self._applied_fill_keys:
             return None
-        old_quantity = self.quantity
+        old_quantity = self.filled_quantity
         quantity = old_quantity + record.execution.shares * fill_direction(record)
         blocked = self.blocked_direction
-        if info.role in {"STOP_LOSS", "TAKE_PROFIT"} and old_quantity and quantity == 0:
+        protective_exit = quantity == 0 and info.role in {"STOP_LOSS", "TAKE_PROFIT"}
+        if protective_exit and old_quantity:
             blocked = 1 if old_quantity > 0 else -1
         elif info.role == "OPEN" and quantity != 0:
             blocked = None
-        episode_closed = quantity == 0 and info.role in {
-            "CLOSE",
-            "STOP_LOSS",
-            "TAKE_PROFIT",
-        }
-        protective_exit = quantity == 0 and info.role in {
-            "STOP_LOSS",
-            "TAKE_PROFIT",
-        }
-        target_quantity = 0.0 if protective_exit else self.target_quantity
+        closed = quantity == 0 and info.role in {"CLOSE", "STOP_LOSS", "TAKE_PROFIT"}
+        target = self.target
+        if protective_exit:
+            target = SignalTarget(
+                signal_key=self.signal_key,
+                execution_model_name=self.execution_model_name,
+                target_quantity=0,
+                target_created_at=self.target_created_at,
+            )
+        position = replace(
+            self.position,
+            contract=info.trade.contract,
+            filled_quantity=quantity,
+            position_id=None if closed else self.position_id,
+            updated_at=utc_now(),
+        )
+        protection = replace(
+            self.protection,
+            position_id=position.position_id,
+            protection_inputs=(
+                {}
+                if closed and (target is None or not target.target_quantity)
+                else self.protection_inputs
+            ),
+        )
         return replace(
             self,
-            contract=info.trade.contract,
-            quantity=quantity,
-            target_quantity=target_quantity,
-            target_contract=None if protective_exit else self.target_contract,
-            target_bracket_inputs=(
-                {} if protective_exit else self.target_bracket_inputs
-            ),
+            position=position,
+            target=target,
+            protection=protection,
             blocked_direction=blocked,
-            position_id=None if episode_closed else self.position_id,
-            bracket_inputs=(
-                {} if episode_closed and not target_quantity else self.bracket_inputs
-            ),
-            updated_at=utc_now(),
             _applied_fill_keys=self._applied_fill_keys | {record.deduplication_key},
         )
 
-    def corrected(self, quantity: float, corrected_at: datetime) -> PositionState:
-        """Align an episode and its pending target to an accepted broker correction.
-
-        Choosing the source and quantity belongs to reconciliation. Flat
-        corrections clear episode inputs, but preserve the direction block and
-        the fill checkpoint so historical evidence cannot undo the correction.
-        """
-        flat = quantity == 0
-        return replace(
-            self,
-            quantity=quantity,
-            target_quantity=quantity,
-            target_contract=None if flat else self.contract,
-            target_bracket_inputs={} if flat else self.bracket_inputs,
-            target_created_at=corrected_at,
+    def corrected(
+        self, filled_quantity: float, corrected_at: datetime
+    ) -> SignalExecutionState:
+        """Align position and target without discarding direction or fill checkpoints."""
+        flat = filled_quantity == 0
+        position = replace(
+            self.position,
+            filled_quantity=filled_quantity,
             position_id=None if flat else self.position_id,
-            bracket_inputs={} if flat else self.bracket_inputs,
             updated_at=corrected_at,
         )
+        protection = replace(
+            self.protection,
+            position_id=position.position_id,
+            protection_inputs={} if flat else self.protection_inputs,
+        )
+        target = SignalTarget(
+            signal_key=self.signal_key,
+            execution_model_name=self.execution_model_name,
+            target_quantity=filled_quantity,
+            target_created_at=corrected_at,
+            contract=None if flat else self.contract,
+            protection_inputs=protection.protection_inputs,
+        )
+        return replace(self, position=position, target=target, protection=protection)
 
     def encode(self) -> dict[str, Any]:
-        """Serialize the episode and its applied-fill checkpoint together."""
+        """Serialize the position and its applied-fill checkpoint together."""
         return {
-            "state_key": f"position:{self.source_key}",
-            "state_type": "position",
-            "source_key": self.source_key,
+            "schema_version": 1,
+            "state_key": f"signal_execution:{self.signal_key}",
+            "state_type": "signal_execution",
+            "signal_key": self.signal_key,
             "execution_model_name": self.execution_model_name,
             "contract": tree(self.contract),
-            "quantity": self.quantity,
+            "filled_quantity": self.filled_quantity,
             "target_quantity": self.target_quantity,
             "target_created_at": self.target_created_at,
             "target_contract": tree(self.target_contract),
-            "target_bracket_inputs": tree(dict(self.target_bracket_inputs)),
+            "target_protection_inputs": tree(dict(self.target_protection_inputs)),
             "position_id": self.position_id,
             "blocked_direction": self.blocked_direction,
-            "bracket_inputs": tree(dict(self.bracket_inputs)),
+            "protection_inputs": tree(dict(self.protection_inputs)),
             "updated_at": self.updated_at,
             "applied_fill_keys": sorted(self._applied_fill_keys),
         }
 
     @classmethod
-    def decode(cls, data: Mapping[str, Any]) -> PositionState:
+    def decode(cls, data: Mapping[str, Any]) -> SignalExecutionState:
         """Restore checkpointed state; uncheckpointed schemas need conversion."""
+        require_schema(data)
         if "applied_fill_keys" not in data:
             raise ValueError(
                 "Position state lacks a fill checkpoint; standalone conversion required"
             )
-        return cls(
-            source_key=str(data["source_key"]),
+        position = SignalPosition(
+            signal_key=str(data["signal_key"]),
             execution_model_name=str(data["execution_model_name"]),
             contract=decode_tree(data.get("contract")),
-            quantity=float(data.get("quantity", 0.0)),
-            target_quantity=data.get("target_quantity"),
-            target_created_at=decode_tree(data.get("target_created_at")),
-            target_contract=decode_tree(data["target_contract"]),
-            target_bracket_inputs=decode_tree(data["target_bracket_inputs"]),
+            filled_quantity=float(data.get("filled_quantity", 0)),
             position_id=data.get("position_id"),
-            blocked_direction=data.get("blocked_direction"),
-            bracket_inputs=decode_tree(data.get("bracket_inputs", {})),
             updated_at=decode_tree(data["updated_at"]),
+        )
+        if data.get("state_key") != f"signal_execution:{position.signal_key}":
+            raise ValueError("Signal execution identity does not match its signal")
+        target = (
+            SignalTarget(
+                signal_key=position.signal_key,
+                execution_model_name=position.execution_model_name,
+                target_quantity=data["target_quantity"],
+                target_created_at=decode_tree(data.get("target_created_at")),
+                contract=decode_tree(data["target_contract"]),
+                protection_inputs=decode_tree(data["target_protection_inputs"]),
+            )
+            if data.get("target_quantity") is not None
+            else None
+        )
+        return cls(
+            position=position,
+            target=target,
+            protection=ProtectionState(
+                signal_key=position.signal_key,
+                position_id=position.position_id,
+                protection_inputs=decode_tree(data.get("protection_inputs", {})),
+            ),
+            blocked_direction=data.get("blocked_direction"),
             _applied_fill_keys=frozenset(data["applied_fill_keys"]),
         )
 
 
 @dataclass(frozen=True, kw_only=True)
 class ContractPosition:
-    """Persist an accounted net balance, independently of execution mode.
+    """Persist an accounted net filled position, independently of execution mode.
 
-    Book updates this balance with the underlying episode, order or roll
+    Book updates this contract_position with the underlying position, order or roll
     mutation. Recovery verifies it against those records before trading starts.
     It is neither a desired target nor a broker-position snapshot.
     """
 
     contract: ibi.Contract
-    quantity: float
+    filled_quantity: float
     updated_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        """Validate a concrete Contract and finite signed balance."""
+        """Validate a concrete Contract and finite signed filled quantity."""
         qualified_contract(self.contract)
-        object.__setattr__(self, "quantity", finite_number(self.quantity, "quantity"))
+        object.__setattr__(
+            self,
+            "filled_quantity",
+            finite_number(self.filled_quantity, "filled_quantity"),
+        )
         aware_datetime(self.updated_at, "updated_at")
 
     def encode(self) -> dict[str, Any]:
-        """Serialize one maintained contract balance."""
+        """Serialize one maintained contract position."""
         return {
-            "state_key": f"balance:{self.contract.conId}",
-            "state_type": "balance",
+            "schema_version": 1,
+            "state_key": f"contract_position:{self.contract.conId}",
+            "state_type": "contract_position",
             "conId": self.contract.conId,
             "contract": tree(self.contract),
-            "quantity": self.quantity,
+            "filled_quantity": self.filled_quantity,
             "updated_at": self.updated_at,
         }
 
     @classmethod
     def decode(cls, document: Mapping[str, Any]) -> ContractPosition:
-        """Validate the concrete identity of a persisted balance."""
-        balance = cls(
+        """Validate the concrete identity of a persisted contract position."""
+        require_schema(document)
+        contract_position = cls(
             contract=decode_tree(document["contract"]),
-            quantity=document["quantity"],
+            filled_quantity=document["filled_quantity"],
             updated_at=decode_tree(document["updated_at"]),
         )
         if (
-            document.get("state_key") != f"balance:{balance.contract.conId}"
-            or document.get("conId") != balance.contract.conId
+            document.get("state_key")
+            != f"contract_position:{contract_position.contract.conId}"
+            or document.get("conId") != contract_position.contract.conId
         ):
-            raise ValueError("Persisted balance identity does not match its Contract")
-        return balance
+            raise ValueError(
+                "Persisted contract position identity does not match its Contract"
+            )
+        return contract_position
 
 
 class PositionStore:
-    """Own source episodes and the shared net balances derived from accounting.
+    """Own signal positions and the shared net contract positions derived from accounting.
 
-    Read source attribution separately from concrete-contract totals. Mutations
+    Read signal attribution separately from concrete-contract totals. Mutations
     are coordinated by Book so order evidence and roll checkpoints precede the
-    balances based on them; this owner never queries the broker or peer stores.
+    contract positions based on them; this owner never queries the broker or peer stores.
     """
 
     def __init__(self, saver: AbstractBaseSaver, writer: PersistenceWriter) -> None:
         """Share the state collection and the single accounting writer."""
         self._saver = saver
         self._writer = writer
-        self._sources: dict[str, PositionState] = {}
-        self._balances: dict[int, ContractPosition] = {}
+        self._signals: dict[str, SignalExecutionState] = {}
+        self._contract_positions: dict[int, ContractPosition] = {}
         self._contributions: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {}
 
-    def _restore_source(self, document: Mapping[str, Any]) -> None:
-        """Restore a source checkpoint without applying live mutation hooks."""
-        state = PositionState.decode(document)
-        self._sources[state.source_key] = state
+    def _restore_signal(self, document: Mapping[str, Any]) -> None:
+        """Restore a signal checkpoint without applying live mutation hooks."""
+        state = SignalExecutionState.decode(document)
+        self._signals[state.signal_key] = state
 
-    def _restore_balance(self, document: Mapping[str, Any]) -> None:
-        """Load a balance for subsequent dependency-aware startup verification."""
-        balance = ContractPosition.decode(document)
-        self._balances[balance.contract.conId] = balance
+    def _restore_contract_position(self, document: Mapping[str, Any]) -> None:
+        """Load a contract position for subsequent dependency-aware startup verification."""
+        contract_position = ContractPosition.decode(document)
+        self._contract_positions[contract_position.contract.conId] = contract_position
 
-    def _put_source(self, state: PositionState) -> PositionState:
-        """Persist a checkpointed source; Book then updates its net contribution."""
+    def _put_signal(self, state: SignalExecutionState) -> SignalExecutionState:
+        """Persist a checkpointed signal; Book then updates its net contribution."""
         self._writer.save(self._saver, state.encode())
-        self._sources[state.source_key] = state
+        self._signals[state.signal_key] = state
         return state
 
     def _checkpoint(
-        self, state: PositionState, received_keys: frozenset[str]
-    ) -> PositionState:
+        self, state: SignalExecutionState, received_keys: frozenset[str]
+    ) -> SignalExecutionState:
         """Keep explicit state updates authoritative over previously received fills."""
-        previous = self._sources.get(state.source_key)
+        previous = self._signals.get(state.signal_key)
         return replace(
             state,
             _applied_fill_keys=state._applied_fill_keys
@@ -286,91 +453,105 @@ class PositionStore:
         )
 
     def _clear(self, cleared_at: datetime) -> None:
-        """Save flat source tombstones while retaining their applied-fill checkpoints."""
-        for state in self._sources.values():
-            self._put_source(
-                replace(
-                    state,
-                    quantity=0,
-                    target_quantity=0,
-                    target_created_at=cleared_at,
-                    target_contract=None,
-                    target_bracket_inputs={},
-                    position_id=None,
-                    blocked_direction=None,
-                    bracket_inputs={},
-                    updated_at=cleared_at,
-                )
+        """Save flat signal tombstones while retaining their fill checkpoints."""
+        for state in self._signals.values():
+            self._put_signal(
+                replace(state.corrected(0, cleared_at), blocked_direction=None)
             )
-        self._sources.clear()
+        self._signals.clear()
 
     def _rekey_order(self, old_id: int, new_id: int) -> None:
         """Move a rebound order's contribution without applying its fills again."""
         contribution = self._contributions.pop(("order", old_id), {})
         self._contributions[("order", new_id)] = contribution
 
-    def for_source(self, source_key: str) -> PositionState | None:
-        """Return one recovered one-to-one state without creating it."""
+    def _for_signal(self, signal_key: str) -> SignalExecutionState | None:
+        """Return one recovered signal execution state without creating it."""
 
-        return self._sources.get(source_key)
+        return self._signals.get(signal_key)
 
-    def source_states(self) -> Mapping[str, PositionState]:
-        """Return a read-only view of all one-to-one states."""
+    def _signal_states(self) -> Mapping[str, SignalExecutionState]:
+        """Return a read-only view of all signal execution states."""
 
-        return MappingProxyType(self._sources)
+        return MappingProxyType(self._signals)
 
-    def source_states_for_contract(
+    def _states_for_contract(
         self, contract: ibi.Contract
-    ) -> tuple[PositionState, ...]:
-        """Return non-flat one-to-one states attributed to a Contract."""
+    ) -> tuple[SignalExecutionState, ...]:
+        """Return non-flat signal execution states attributed to a Contract."""
 
         con_id = qualified_contract(contract).conId
         return tuple(
             state
-            for state in self._sources.values()
+            for state in self._signals.values()
             if state.contract is not None
             and state.contract.conId == con_id
-            and state.quantity
+            and state.filled_quantity
         )
 
-    def quantity(self, contract: ibi.Contract) -> float:
-        """Read one maintained net balance by conId, in either execution mode.
+    def for_signal(self, signal_key: str) -> SignalPosition | None:
+        """Return filled exposure for a signal, including valid pending/flat state."""
+        state = self._for_signal(signal_key)
+        return state.position if state is not None else None
+
+    def for_contract(self, contract: ibi.Contract) -> ContractPosition | None:
+        """Return the maintained filled position for one concrete conId."""
+        return self._contract_positions.get(qualified_contract(contract).conId)
+
+    def by_signal(self) -> Mapping[str, SignalPosition]:
+        """Return an immutable snapshot of positions keyed by signal."""
+        return MappingProxyType(
+            {key: state.position for key, state in self._signals.items()}
+        )
+
+    def signal_positions_for_contract(
+        self, contract: ibi.Contract
+    ) -> tuple[SignalPosition, ...]:
+        """Return non-flat attributed positions for one concrete Contract."""
+        return tuple(state.position for state in self._states_for_contract(contract))
+
+    def filled_quantity(self, contract: ibi.Contract) -> float:
+        """Read one maintained net filled position by conId, in either execution mode.
 
         This excludes desired targets and unfilled working quantities. It does
         not query the broker or scan historical fills.
         """
-        balance = self._balances.get(qualified_contract(contract).conId)
-        return balance.quantity if balance is not None else 0.0
+        contract_position = self._contract_positions.get(
+            qualified_contract(contract).conId
+        )
+        return (
+            contract_position.filled_quantity if contract_position is not None else 0.0
+        )
 
     def by_contract(self) -> dict[ibi.Contract, float]:
-        """Read non-flat accounted balances, without reconstructing history.
+        """Read non-flat accounted contract positions, without reconstructing history.
 
-        Both execution modes use this account-level view. One-to-one sources
-        are netted per concrete Contract; episode ownership remains available
-        separately through source_states(). The returned mapping is a copy.
+        Both execution modes use this account-level view. Signal positions
+        are netted per concrete Contract; position ownership remains available
+        separately through by_signal(). The returned mapping is a copy.
         """
         return {
-            balance.contract: balance.quantity
-            for balance in self._balances.values()
-            if balance.quantity
+            contract_position.contract: contract_position.filled_quantity
+            for contract_position in self._contract_positions.values()
+            if contract_position.filled_quantity
         }
 
-    def blocked_direction(self, source_key: str) -> Literal[-1, 1] | None:
-        """Return the persisted stopped direction for a one-to-one source."""
+    def blocked_direction(self, signal_key: str) -> Literal[-1, 1] | None:
+        """Return the persisted stopped direction for a signal."""
 
-        state = self._sources.get(source_key)
+        state = self._signals.get(signal_key)
         return state.blocked_direction if state is not None else None
 
     def _order_contribution(
         self, info: OrderInfo, cutoffs: Mapping[int, datetime]
     ) -> dict[ibi.Contract, float]:
-        """Calculate one source-less order's contribution to account balances.
+        """Calculate one unattributed order's contribution to account contract positions.
 
-        Episodes already account for source-attributed orders. Roll leg evidence
+        Positions already account for signal-attributed orders. Roll leg evidence
         replaces the BAG fallback, rather than adding the same movement twice.
         This runs on mutation/recovery, never on a position query.
         """
-        if info.source_key is not None:
+        if info.signal_key is not None:
             return {}
         return self._fill_contribution(info, cutoffs)
 
@@ -411,24 +592,28 @@ class PositionStore:
                 contracts[contract.conId] = contract
                 quantities[contract.conId] += record.execution.shares * signed
         return {
-            contracts[con_id]: quantity
-            for con_id, quantity in quantities.items()
-            if quantity
+            contracts[con_id]: filled_quantity
+            for con_id, filled_quantity in quantities.items()
+            if filled_quantity
         }
 
-    def _episode_contribution(
-        self, state: PositionState, rolls: Sequence[RollState]
+    def _position_contribution(
+        self, state: SignalExecutionState, rolls: Sequence[RollState]
     ) -> dict[ibi.Contract, float]:
-        """Count an episode unless an unfinished roll owns its physical movement."""
-        if state.contract is None or not state.contract.conId or not state.quantity:
+        """Count a position unless an unfinished roll owns its physical movement."""
+        if (
+            state.contract is None
+            or not state.contract.conId
+            or not state.filled_quantity
+        ):
             return {}
         if any(
             roll.stage is not FutureRollStage.COMPLETE
-            and any(p.source_key == state.source_key for p in roll.participants)
+            and any(p.signal_key == state.signal_key for p in roll.participants)
             for roll in rolls
         ):
             return {}
-        return {state.contract: state.quantity}
+        return {state.contract: state.filled_quantity}
 
     def _replace_contributions(
         self,
@@ -436,7 +621,7 @@ class PositionStore:
         *,
         persist: bool = True,
     ) -> None:
-        """Apply changed accounting contributions through one balance path.
+        """Apply changed accounting contributions through one contract-position path.
 
         Replacing the prior contribution makes order re-saves and repeated roll
         stages harmless. Only changed Contracts are persisted, after evidence.
@@ -446,9 +631,9 @@ class PositionStore:
         for owner, positions in changes.items():
             previous = self._contributions.get(owner, {})
             for multiplier, mapping in ((-1, previous), (1, positions)):
-                for contract, quantity in mapping.items():
+                for contract, filled_quantity in mapping.items():
                     contracts[contract.conId] = contract
-                    deltas[contract.conId] += multiplier * quantity
+                    deltas[contract.conId] += multiplier * filled_quantity
             if positions:
                 self._contributions[owner] = positions
             else:
@@ -456,14 +641,17 @@ class PositionStore:
         for con_id, delta in deltas.items():
             if not delta:
                 continue
-            current = self._balances.get(con_id)
-            balance = ContractPosition(
+            current = self._contract_positions.get(con_id)
+            contract_position = ContractPosition(
                 contract=contracts[con_id],
-                quantity=(current.quantity if current is not None else 0.0) + delta,
+                filled_quantity=(
+                    current.filled_quantity if current is not None else 0.0
+                )
+                + delta,
             )
-            self._balances[con_id] = balance
+            self._contract_positions[con_id] = contract_position
             if persist:
-                self._put_balance(balance)
+                self._put_contract_position(contract_position)
 
     def _rebuild(
         self,
@@ -471,15 +659,15 @@ class PositionStore:
         rolls: Sequence[RollState],
         cutoffs: Mapping[int, datetime],
     ) -> tuple[ContractPosition, ...]:
-        """Verify saved balances once at restore/reset, repairing partial writes.
+        """Verify saved contract positions once at restore/reset, repairing partial writes.
 
-        Episode state remains authoritative for one-to-one corrections; fills
-        recover source-less orders, and active rolls recover physical movement.
+        Position state remains authoritative for signal execution corrections; fills
+        recover unattributed orders, and active rolls recover physical movement.
         No second applied-execution ledger or multi-document transaction is
-        needed: order evidence precedes balances in the critical save queue.
+        needed: order evidence precedes contract positions in the critical save queue.
         """
-        saved = self._balances
-        self._balances = {}
+        saved = self._contract_positions
+        self._contract_positions = {}
         self._contributions = {}
         changes: dict[tuple[str, str | int], dict[ibi.Contract, float]] = {
             ("order", info.orderId): self._order_contribution(info, cutoffs)
@@ -487,37 +675,40 @@ class PositionStore:
         }
         changes.update(
             {
-                ("source", source): self._episode_contribution(state, rolls)
-                for source, state in self._sources.items()
+                ("signal", signal): self._position_contribution(state, rolls)
+                for signal, state in self._signals.items()
             }
         )
         changes.update(
             {
                 ("roll", state.series_key): dict(self._roll_contribution(state, orders))
                 for state in rolls
-                if state.mode is FutureRollMode.BRACKET
+                if state.mode is ExecutionMode.SIGNAL
                 and state.stage is not FutureRollStage.COMPLETE
             }
         )
         self._replace_contributions(changes, persist=False)
         repaired = []
-        for con_id in sorted(saved.keys() | self._balances.keys()):
+        for con_id in sorted(saved.keys() | self._contract_positions.keys()):
             previous = saved.get(con_id)
-            current = self._balances.get(con_id)
+            current = self._contract_positions.get(con_id)
             if current is None and previous is not None:
-                current = replace(previous, quantity=0.0, updated_at=utc_now())
+                current = replace(previous, filled_quantity=0.0, updated_at=utc_now())
             if current is None:
                 continue
-            if previous is not None and previous.quantity == current.quantity:
-                self._balances[con_id] = previous
+            if (
+                previous is not None
+                and previous.filled_quantity == current.filled_quantity
+            ):
+                self._contract_positions[con_id] = previous
             else:
-                self._balances[con_id] = current
+                self._contract_positions[con_id] = current
                 repaired.append(current)
         return tuple(repaired)
 
-    def _put_balance(self, balance: ContractPosition) -> None:
-        """Persist a shared Contract balance under its natural identity."""
-        self._writer.save(self._saver, balance.encode())
+    def _put_contract_position(self, contract_position: ContractPosition) -> None:
+        """Persist a shared Contract position under its natural identity."""
+        self._writer.save(self._saver, contract_position.encode())
 
     def _roll_contribution(
         self, state: RollState, orders: Sequence[OrderInfo]
@@ -525,7 +716,9 @@ class PositionStore:
         """Project broker-net old/new quantities from persisted roll Fills."""
 
         quantities: defaultdict[ibi.Contract, float] = defaultdict(float)
-        quantities[state.old_contract] = sum(p.quantity for p in state.participants)
+        quantities[state.old_contract] = sum(
+            p.filled_quantity for p in state.participants
+        )
         for info in orders:
             if (
                 info.role == "ROLL"
@@ -538,9 +731,9 @@ class PositionStore:
                     quantities[contract] += movement
         return MappingProxyType(
             {
-                contract: quantity
-                for contract, quantity in quantities.items()
-                if quantity
+                contract: filled_quantity
+                for contract, filled_quantity in quantities.items()
+                if filled_quantity
             }
         )
 
@@ -550,55 +743,77 @@ class PositionStore:
         record: FillRecord,
         *,
         initial_checkpoint: frozenset[str] = frozenset(),
-    ) -> PositionState | None:
-        """Calculate a source transition only when its checkpoint lacks the fill."""
-        if info.source_key is not None and not isinstance(info.trade.contract, ibi.Bag):
-            state = self._sources.get(info.source_key) or PositionState(
-                source_key=info.source_key,
-                execution_model_name=info.execution_model_name,
-                contract=info.trade.contract,
+    ) -> SignalExecutionState | None:
+        """Calculate a signal transition only when its checkpoint lacks the fill."""
+        if info.signal_key is not None and not isinstance(info.trade.contract, ibi.Bag):
+            state = self._signals.get(info.signal_key) or SignalExecutionState(
+                position=SignalPosition(
+                    signal_key=info.signal_key,
+                    execution_model_name=info.execution_model_name,
+                    contract=info.trade.contract,
+                ),
+                protection=ProtectionState(
+                    signal_key=info.signal_key, position_id=None
+                ),
                 _applied_fill_keys=initial_checkpoint,
             )
             return state.with_fill(info, record)
         return None
 
-    def _new_episode(
+    def _new_position(
         self,
-        source_key: str,
+        signal_key: str,
         execution_model_name: str,
         contract: ibi.Contract,
         *,
         target_quantity: float,
         target_created_at: datetime,
-        bracket_inputs: Mapping[str, Any] = MappingProxyType({}),
-    ) -> PositionState:
-        """Construct a new episode for Book to persist with an evidence checkpoint."""
+        protection_inputs: Mapping[str, Any] = MappingProxyType({}),
+    ) -> SignalExecutionState:
+        """Construct a new position for Book to persist with an evidence checkpoint."""
 
-        state = PositionState(
-            source_key=source_key,
+        position = SignalPosition(
+            signal_key=signal_key,
             execution_model_name=execution_model_name,
             contract=contract,
-            target_contract=contract,
-            target_quantity=target_quantity,
-            target_created_at=target_created_at,
             position_id=str(uuid4()),
-            bracket_inputs=bracket_inputs,
-            target_bracket_inputs=bracket_inputs,
-            blocked_direction=self.blocked_direction(source_key),
         )
-        return state
+        return SignalExecutionState(
+            position=position,
+            target=SignalTarget(
+                signal_key=signal_key,
+                execution_model_name=execution_model_name,
+                contract=contract,
+                target_quantity=target_quantity,
+                target_created_at=target_created_at,
+                protection_inputs=protection_inputs,
+            ),
+            protection=ProtectionState(
+                signal_key=signal_key,
+                position_id=position.position_id,
+                protection_inputs=protection_inputs,
+            ),
+            blocked_direction=self.blocked_direction(signal_key),
+        )
 
-    def _closed_episode(self, source_key: str) -> PositionState:
-        """Mark one source flat while preserving its recovery attribution."""
-
-        state = self._sources[source_key]
+    def _closed_position(self, signal_key: str) -> SignalExecutionState:
+        state = self._signals[signal_key]
+        # Closing keeps the original acceptance time, matching fill-driven closure.
+        closed = state.corrected(0, utc_now())
+        assert closed.target is not None
         return replace(
-            state,
-            quantity=0.0,
-            target_quantity=0.0,
-            target_contract=None,
-            target_bracket_inputs={},
-            position_id=None,
-            bracket_inputs={},
-            updated_at=utc_now(),
+            closed,
+            target=replace(closed.target, target_created_at=state.target_created_at),
         )
+
+
+class ProtectionStore:
+    """Read current protection from the authoritative signal-state owner."""
+
+    def __init__(self, positions: PositionStore) -> None:
+        self._positions = positions
+
+    def for_signal(self, signal_key: str) -> ProtectionState | None:
+        """Return saved inputs for the current position, if the signal is known."""
+        state = self._positions._for_signal(signal_key)
+        return state.protection if state is not None else None

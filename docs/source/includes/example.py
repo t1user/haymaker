@@ -18,11 +18,11 @@ from haymaker.components import (
 
 
 class EMACrossSignalModel(PandasSignalModel):
-    def __init__(self, source_key, contract):
+    def __init__(self, signal_key, contract):
         self.fast_lookback = 12
         self.slow_lookback = 48
         self.atr_lookback = 24
-        super().__init__(source_key, contract, SignalType.STATE)
+        super().__init__(signal_key, contract, SignalType.STATE)
 
     def df(self, df: pd.DataFrame) -> pd.DataFrame:
         df["fast_ema"] = df["close"].ewm(self.fast_lookback).mean()
@@ -34,9 +34,7 @@ class EMACrossSignalModel(PandasSignalModel):
 
 es_contract = ibi.ContFuture("ES", "CME")
 
-pipe = HistoricalDataStreamer(
-    es_contract, "10 D", "1 hour", "TRADES"
-).pipe(
+pipe = HistoricalDataStreamer(es_contract, "10 D", "1 hour", "TRADES").pipe(
     BarAggregator(NoFilter()),
     EMACrossSignalModel(
         "ema_cross_ES",

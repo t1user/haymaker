@@ -98,10 +98,10 @@ class AlwaysLongSignalModel(SignalModel):
 
 
 class DirectLongPortfolio(Portfolio):
-    """Map each scalar Signal to one stable direct target identity."""
+    """Map each scalar Signal to one stable contract target identity."""
 
     def process(self, signal: Signal) -> Iterable[PositionTarget]:
-        """Emit the source value as its absolute direct target."""
+        """Emit the signal value as its absolute contract target."""
 
         if not isinstance(signal.value, float):
             raise TypeError("DirectLongPortfolio requires scalar Signals")
@@ -124,7 +124,7 @@ class FailingAsyncAtom(Atom):
 
 
 class CrossContractTarget(Atom):
-    """Emit a direct target for a Contract different from the data source."""
+    """Emit a contract target for a Contract different from the data source."""
 
     def __init__(self, contract: ibi.Contract) -> None:
         self.contract = contract
@@ -149,7 +149,7 @@ class StartupTarget(Atom):
     """Submit one target before the first observed bar is processed."""
 
     def onStart(self, data: object, source: Atom | None = None) -> None:
-        """Emit a one-unit target for the source's resolved Contract."""
+        """Emit a one-unit target for the signal's resolved Contract."""
 
         if source is None or source.contract is None:
             raise RuntimeError("StartupTarget requires a resolved source Contract")
@@ -313,7 +313,7 @@ async def test_repository_skips_clearly_unrelated_malformed_metadata() -> None:
 async def test_repository_rejects_plausibly_matching_malformed_metadata() -> None:
     """Missing identity data still fails when the collection may be requested."""
 
-    blueprint = _stock(324, "GOOD")
+    contract_spec = _stock(324, "GOOD")
     store = MemoryBacktestStore(
         {},
         {
@@ -328,13 +328,13 @@ async def test_repository_rejects_plausibly_matching_malformed_metadata() -> Non
         },
     )
     repository = BacktestDataRepository(store)
-    repository.register(blueprint)
+    repository.register(contract_spec)
 
     with pytest.raises(MissingContractMetadataError, match="nonzero contract conId"):
         await repository.load()
 
 
-async def test_contract_blueprints_compare_derivative_identity() -> None:
+async def test_contract_specs_compare_derivative_identity() -> None:
     """Option strike and right cannot silently resolve a different series."""
 
     point = pd.date_range("2025-01-06 10:00", periods=1, tz="UTC")
@@ -697,17 +697,17 @@ async def test_backtester_runs_real_bracket_controller_and_book_path() -> None:
             )
         },
     )
-    blueprint = ibi.Stock("TEST", "SMART", "USD")
+    contract_spec = ibi.Stock("TEST", "SMART", "USD")
     previous_runtime = Atom.__dict__.get("runtime")
     previous_streamers = {id(streamer) for streamer in Streamer.instances}
     previous_queues = {id(runner) for runner in QueueRunner._instances}
     previous_task_factory = asyncio.get_running_loop().get_task_factory()
 
     def strategy_factory() -> None:
-        """Construct a normal one-to-one Haymaker bracket graph."""
+        """Construct a normal signal execution Haymaker bracket graph."""
 
         source = HistoricalDataStreamer(
-            blueprint,
+            contract_spec,
             2,
             "1 hour",
             "TRADES",
@@ -716,7 +716,7 @@ async def test_backtester_runs_real_bracket_controller_and_book_path() -> None:
         Pipe(
             source,
             BarAggregator(NoFilter(), future_adjust_type=None),
-            AlwaysLongSignalModel("alpha", blueprint, SignalType.STATE),
+            AlwaysLongSignalModel("alpha", contract_spec, SignalType.STATE),
             BinarySignalProcessor(respect_blocked_direction=True),
             PortfolioWrapper(FixedSizeAllocator(1)),
             BracketExecutionModel(
@@ -755,14 +755,14 @@ async def test_startup_order_uses_first_observed_contract_session() -> None:
         {"START_STK": _frame(points, open_=[100, 101])},
         {"START_STK": _metadata(contract)},
     )
-    blueprint = ibi.Stock("START", "SMART", "USD")
+    contract_spec = ibi.Stock("START", "SMART", "USD")
 
     def strategy_factory() -> None:
         """Build a graph whose target is emitted only during startup."""
 
         Pipe(
             HistoricalDataStreamer(
-                blueprint,
+                contract_spec,
                 1,
                 "1 hour",
                 "TRADES",
@@ -788,21 +788,21 @@ async def test_result_exposes_order_working_at_end_of_range() -> None:
         {"PENDING_STK": _frame(point)},
         {"PENDING_STK": _metadata(contract)},
     )
-    blueprint = ibi.Stock("PENDING", "SMART", "USD")
+    contract_spec = ibi.Stock("PENDING", "SMART", "USD")
 
     def strategy_factory() -> None:
         """Submit a normal market order from the final observation."""
 
         Pipe(
             HistoricalDataStreamer(
-                blueprint,
+                contract_spec,
                 1,
                 "1 hour",
                 "TRADES",
                 timeout=False,
             ),
             BarAggregator(NoFilter(), future_adjust_type=None),
-            AlwaysLongSignalModel("pending", blueprint, SignalType.STATE),
+            AlwaysLongSignalModel("pending", contract_spec, SignalType.STATE),
             DirectLongPortfolio(),
             SerialTargetExecutionModel(name="pending_serial"),
         )
@@ -832,21 +832,21 @@ async def test_new_order_requires_a_bar_for_its_own_contract() -> None:
             "TARGET_STK": _metadata(target_contract),
         },
     )
-    source_blueprint = ibi.Stock("SOURCE", "SMART", "USD")
-    target_blueprint = ibi.Stock("TARGET", "SMART", "USD")
+    source_contract_spec = ibi.Stock("SOURCE", "SMART", "USD")
+    target_contract_spec = ibi.Stock("TARGET", "SMART", "USD")
 
     def strategy_factory() -> None:
         """Drive TARGET orders from SOURCE observations."""
 
         source = HistoricalDataStreamer(
-            source_blueprint,
+            source_contract_spec,
             1,
             "1 hour",
             "TRADES",
             timeout=False,
         )
         HistoricalDataStreamer(
-            target_blueprint,
+            target_contract_spec,
             1,
             "1 hour",
             "TRADES",
@@ -855,7 +855,7 @@ async def test_new_order_requires_a_bar_for_its_own_contract() -> None:
         Pipe(
             source,
             BarAggregator(NoFilter(), future_adjust_type=None),
-            CrossContractTarget(target_blueprint),
+            CrossContractTarget(target_contract_spec),
             SerialTargetExecutionModel(name="cross_contract_serial"),
         )
 
@@ -888,20 +888,20 @@ async def test_flat_futures_roll_restarts_graph_on_new_active_contract() -> None
             "ESG5_FUT": _metadata(successor, minTick=0.25),
         },
     )
-    blueprint = ibi.ContFuture("ES", "CME", "USD", tradingClass="ES")
+    contract_spec = ibi.ContFuture("ES", "CME", "USD", tradingClass="ES")
     signals: list[Any] = []
 
     def strategy_factory() -> None:
         """Record Signals while leaving the simulated account flat."""
 
         source = HistoricalDataStreamer(
-            blueprint,
+            contract_spec,
             2,
             "1 hour",
             "TRADES",
             timeout=False,
         )
-        model = AlwaysLongSignalModel("flat_roll", blueprint, SignalType.STATE)
+        model = AlwaysLongSignalModel("flat_roll", contract_spec, SignalType.STATE)
         model.dataEvent.connect(signals.append, keep_ref=True)
         Pipe(
             source,
@@ -942,23 +942,23 @@ def _held_future_store() -> tuple[
             "ESG5_FUT": _metadata(successor, minTick=0.25),
         },
     )
-    blueprint = ibi.ContFuture("ES", "CME", "USD", tradingClass="ES")
-    return store, blueprint, expiring
+    contract_spec = ibi.ContFuture("ES", "CME", "USD", tradingClass="ES")
+    return store, contract_spec, expiring
 
 
-def _held_future_strategy(blueprint: ibi.ContFuture) -> None:
+def _held_future_strategy(contract_spec: ibi.ContFuture) -> None:
     """Construct a normal serial strategy that remains long its first future."""
 
     Pipe(
         HistoricalDataStreamer(
-            blueprint,
+            contract_spec,
             1,
             "1 day",
             "TRADES",
             timeout=False,
         ),
         BarAggregator(NoFilter(), future_adjust_type=None),
-        AlwaysLongSignalModel("held_future", blueprint, SignalType.STATE),
+        AlwaysLongSignalModel("held_future", contract_spec, SignalType.STATE),
         DirectLongPortfolio(),
         SerialTargetExecutionModel(name="held_future_serial"),
     )
@@ -967,14 +967,14 @@ def _held_future_strategy(blueprint: ibi.ContFuture) -> None:
 async def test_next_only_futures_change_keeps_held_active_contract() -> None:
     """A held ACTIVE remains valid when only NEXT advances early."""
 
-    store, blueprint, expiring = _held_future_store()
+    store, contract_spec, expiring = _held_future_store()
 
     result = await Backtester(
         store,
         end=datetime(2025, 1, 8, 10, tzinfo=timezone.utc),
         futures_roll_bdays=0,
         futures_roll_margin_bdays=2,
-    ).run(lambda: _held_future_strategy(blueprint))
+    ).run(lambda: _held_future_strategy(contract_spec))
 
     assert result.positions == {expiring.conId: 1.0}
 
@@ -982,7 +982,7 @@ async def test_next_only_futures_change_keeps_held_active_contract() -> None:
 async def test_active_futures_roll_rejects_held_expiring_contract() -> None:
     """The documented unsupported open-position roll fails before new bars."""
 
-    store, blueprint, _expiring = _held_future_store()
+    store, contract_spec, _expiring = _held_future_store()
 
     with pytest.raises(
         UnsupportedBacktestFeatureError,
@@ -992,7 +992,7 @@ async def test_active_futures_roll_rejects_held_expiring_contract() -> None:
             store,
             futures_roll_bdays=0,
             futures_roll_margin_bdays=2,
-        ).run(lambda: _held_future_strategy(blueprint))
+        ).run(lambda: _held_future_strategy(contract_spec))
 
 
 async def test_backtester_rejects_trailing_bracket_before_reading_bars() -> None:
@@ -1004,13 +1004,13 @@ async def test_backtester_rejects_trailing_bracket_before_reading_bars() -> None
         {"TRAIL_STK": _frame(point)},
         {"TRAIL_STK": _metadata(contract, minTick=0.25)},
     )
-    blueprint = ibi.Stock("TRAIL", "SMART", "USD")
+    contract_spec = ibi.Stock("TRAIL", "SMART", "USD")
 
     def strategy_factory() -> None:
         """Construct a graph whose trailing protection is out of scope."""
 
         source = HistoricalDataStreamer(
-            blueprint,
+            contract_spec,
             1,
             "1 hour",
             "TRADES",
@@ -1019,7 +1019,7 @@ async def test_backtester_rejects_trailing_bracket_before_reading_bars() -> None
         Pipe(
             source,
             BarAggregator(NoFilter(), future_adjust_type=None),
-            AlwaysLongSignalModel("trail", blueprint, SignalType.STATE),
+            AlwaysLongSignalModel("trail", contract_spec, SignalType.STATE),
             BinarySignalProcessor(),
             PortfolioWrapper(FixedSizeAllocator(1)),
             BracketExecutionModel(
@@ -1046,14 +1046,14 @@ async def test_backtester_propagates_async_event_callback_failures() -> None:
         {"FAIL_STK": _frame(point)},
         {"FAIL_STK": _metadata(contract)},
     )
-    blueprint = ibi.Stock("FAIL", "SMART", "USD")
+    contract_spec = ibi.Stock("FAIL", "SMART", "USD")
 
     def strategy_factory() -> None:
         """Connect a scheduled failing callback to a historical source."""
 
         Pipe(
             HistoricalDataStreamer(
-                blueprint,
+                contract_spec,
                 1,
                 "1 hour",
                 "TRADES",
@@ -1081,7 +1081,7 @@ async def test_backtester_captures_fast_broker_callback_failures() -> None:
         {"BROKERFAIL_STK": _frame(points)},
         {"BROKERFAIL_STK": _metadata(contract)},
     )
-    blueprint = ibi.Stock("BROKERFAIL", "SMART", "USD")
+    contract_spec = ibi.Stock("BROKERFAIL", "SMART", "USD")
 
     def strategy_factory() -> None:
         """Attach a failing callback to the simulated IB execution event."""
@@ -1098,14 +1098,14 @@ async def test_backtester_captures_fast_broker_callback_failures() -> None:
         )
         Pipe(
             HistoricalDataStreamer(
-                blueprint,
+                contract_spec,
                 1,
                 "1 hour",
                 "TRADES",
                 timeout=False,
             ),
             BarAggregator(NoFilter(), future_adjust_type=None),
-            AlwaysLongSignalModel("broker_failure", blueprint, SignalType.STATE),
+            AlwaysLongSignalModel("broker_failure", contract_spec, SignalType.STATE),
             DirectLongPortfolio(),
             SerialTargetExecutionModel(name="broker_failure_serial"),
         )
@@ -1129,7 +1129,7 @@ async def test_backtester_does_not_await_unrelated_concurrent_tasks() -> None:
         {"ISOLATED_STK": _frame(point)},
         {"ISOLATED_STK": _metadata(contract)},
     )
-    blueprint = ibi.Stock("ISOLATED", "SMART", "USD")
+    contract_spec = ibi.Stock("ISOLATED", "SMART", "USD")
     create_child = asyncio.Event()
     child_created = asyncio.Event()
     release_child = asyncio.Event()
@@ -1150,7 +1150,7 @@ async def test_backtester_does_not_await_unrelated_concurrent_tasks() -> None:
         create_child.set()
         await child_created.wait()
         HistoricalDataStreamer(
-            blueprint,
+            contract_spec,
             1,
             "1 hour",
             "TRADES",

@@ -1,6 +1,8 @@
-*****************
+***************
 Live Components
-*****************
+***************
+
+See :doc:`terminology` for the framework vocabulary and filled/desired exposure scopes.
 
 Haymaker strategies are ordinary Python modules that compose
 :class:`~haymaker.base.Atom` objects after the live runtime has installed a
@@ -29,7 +31,7 @@ Each component validates messages when they arrive in ``onData``.
 Fan-out sends the same object reference to every branch. Standard messages
 prevent field reassignment and copy metadata at the top level, but Contracts
 and nested metadata values remain shared mutable objects. Consumers must treat
-them as immutable or copy them before mutation. Signal, PositionProposal, and
+them as immutable or copy them before mutation. Signal, PositionRequest, and
 PositionTarget are intentionally unhashable.
 
 Atoms are stateful graph nodes rather than value records. A dataclass-based
@@ -43,13 +45,13 @@ otherwise generate value equality again.
 .. autoclass:: haymaker.base.Pipe
    :members:
 
-Blueprints and concrete Contracts
----------------------------------
+ContractSpecs and concrete Contracts
+------------------------------------
 
 .. autoclass:: haymaker.enums.ActiveNext
 
 .. autoclass:: haymaker.contract_registry.ContractRegistry
-   :members: blueprint_key, blueprint_for, contracts_for, get_selector
+   :members: contract_spec_key, contract_spec_for, contracts_for, get_selector
 
 .. autoclass:: haymaker.contract_selector.AbstractBaseContractSelector
 
@@ -61,9 +63,9 @@ Blueprints and concrete Contracts
 
 .. autoclass:: haymaker.details_processor.Details
 
-Assign an ordinary ``ibi.Contract`` blueprint to ``atom.contract``. Reading
+Assign an ordinary ``ibi.Contract`` contract_spec to ``atom.contract``. Reading
 ``atom.contract`` resolves its current ``which_contract`` role. Reading
-``atom.contract_blueprint`` returns the original declaration as a safe copy;
+``atom.contract_spec`` returns the original declaration as a safe copy;
 ``atom.contract_selector`` exposes the initialized selector and raises if it
 is not ready.
 
@@ -73,7 +75,7 @@ at ACTIVE until the configured margin. Explicit nth requests raise when the
 requested maturity is unavailable; NEXT retains its last-available fallback.
 Wrappers also expose ``roll_day`` and expiry information.
 
-The registry's ``blueprint_for(contract)``, ``get_selector(contract)`` and
+The registry's ``contract_spec_for(contract)``, ``get_selector(contract)`` and
 ``contracts_for(contract)`` accept a declaration or qualified member. Membership
 comes from qualification, not symbol guessing. Identical declarations share
 registration; distinct declarations resolving to overlapping conIds raise.
@@ -81,9 +83,9 @@ The registry keeps declaration copies so qualification cannot mutate identity.
 
 SignalModels normally emit ``self.contract``. Override
 ``select_signal_contract()`` to return another qualified chain member, or
-``self.contract_blueprint`` for a custom direct Portfolio to resolve. The
-framework still constructs source identity, value, metadata and timestamps.
-The one-to-one allocator requires a qualified Contract. Selecting a different
+``self.contract_spec`` for a custom contract Portfolio to resolve. The
+framework still constructs signal identity, value, metadata and timestamps.
+The signal execution allocator requires a qualified Contract. Selecting a different
 Signal Contract does not change the selector's ACTIVE audit identity.
 
 Trading messages
@@ -93,12 +95,12 @@ The standard message sequence is:
 
 .. code-block:: text
 
-   Signal -> PositionProposal -> PositionTarget
+   Signal -> PositionRequest -> PositionTarget
 
-:class:`~haymaker.components.Signal` identifies one logical source, a Contract,
+:class:`~haymaker.components.Signal` identifies one named signal stream, a Contract,
 a finite scalar value or :class:`~haymaker.components.SignalPair`, and
 mandatory :class:`~haymaker.components.SignalType`.
-``STATE`` replaces the source's previous desired state. Each ``EVENT`` is a new
+``STATE`` replaces the signal's previous desired state. Each ``EVENT`` is a new
 event; an EVENT zero means that no event occurred. ``as_of`` is the optional
 effective market-observation time, while ``created_at`` records local Signal
 creation. They deliberately remain distinct: IB bars are left-labelled, so a
@@ -107,22 +109,22 @@ which the completed bar was processed.
 ``SignalPair`` carries separate entry and exit values without duplicating the
 Signal's identity, Contract, timestamps, or metadata.
 
-:class:`~haymaker.components.PositionProposal` is used only by one-to-one
+:class:`~haymaker.components.PositionRequest` is used only by signal execution
 processors. It preserves the original Signal, chooses short/flat/long
 direction, and includes mandatory OPEN/CLOSE/REVERSE intent.
 
 :class:`~haymaker.components.PositionTarget` is an absolute signed setpoint for
 a concrete Contract with a non-zero ``conId``. It never contains a captured
 current quantity or a proposed order delta. The numeric target is authoritative.
-Direct Portfolio targets omit ``source_key`` and intent. Each is an absolute
+Contract Portfolio targets omit ``signal_key`` and intent. Each is an absolute
 setpoint for its exact concrete Contract; multiple expiries can have independent
-targets. One-to-one targets instead carry ``source_key`` and the mandatory
-proposal intent supplied by ``PortfolioWrapper``.
+targets. Signal execution targets instead carry ``signal_key`` and the mandatory
+request intent supplied by ``PortfolioWrapper``.
 
-One-to-one Contract selection belongs to ``BracketExecutionModel``, not the
-wrapper. OPEN uses the incoming target Contract. CLOSE uses the source's held
+Signal execution Contract selection belongs to ``BracketExecutionModel``, not the
+wrapper. OPEN uses the incoming target Contract. CLOSE uses the signal's held
 or pending-entry Contract in Book even if the incoming target names another
-expiry. REVERSE completely closes that episode before opening the incoming
+expiry. REVERSE completely closes that position before opening the incoming
 Contract under a new position ID. Book stores held and pending-target Contracts
 and their bracket inputs separately; changing ACTIVE/NEXT or accepting a newer
 target never changes the identity of an existing holding. Recovery resumes the
@@ -134,11 +136,11 @@ pending operation without requiring an old Trade callback to be replayed.
 
 .. autoclass:: haymaker.components.SignalType
 
-.. autoclass:: haymaker.components.PositionProposal
+.. autoclass:: haymaker.components.PositionRequest
 
 .. autoclass:: haymaker.components.PositionTarget
 
-.. autoclass:: haymaker.components.PositionIntent
+.. autoclass:: haymaker.components.TargetIntent
 
 .. autoclass:: haymaker.components.StandardOrderRole
 
@@ -166,7 +168,7 @@ Event inactivity monitoring
 :class:`~haymaker.components.EventTimeout` monitors any ``eventkit.Event`` and
 calls a user callback once when one inactivity interval expires. Every source
 emission moves the deadline. After a timeout, fresh source data rearms the next
-episode. General event timeouts are user-owned: create positive intervals on
+position. General event timeouts are user-owned: create positive intervals on
 the running asyncio loop and call ``cancel()`` when the owning object ends.
 Haymaker does not cancel them during a supervised workload restart.
 
@@ -238,7 +240,7 @@ and is not reset by supervised workload restarts:
 Call ``guard.close()`` when the application-specific owner releases the
 component. A callback may also be an ``async def`` function. After one timeout,
 the callback is not repeated until ``dataEvent`` emits again and begins a new
-inactivity episode.
+inactivity position.
 
 Market-aware timeout in a custom Atom
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -394,7 +396,7 @@ Signal models
 producer. A custom model implements ``calculate_signal(data)`` and returns a
 :class:`~haymaker.components.SignalCalculation` containing only its calculated
 value, optional metadata, and optional observation time. The framework supplies
-the configured source, resolved Contract, SignalType, and ``created_at`` when it
+the configured signal, resolved Contract, SignalType, and ``created_at`` when it
 constructs the immutable Signal. Override ``validate_signal_value()`` to impose
 model-specific restrictions beyond the standard finite-value checks.
 
@@ -426,7 +428,7 @@ express the required conversion. The override returns only
 ``persistence=False`` disables calculation history. ``persistence=True`` uses
 the runtime default configured by ``signal_persistence.library``. The standard
 implementation records history under
-``{source_key}_{ACTIVE.localSymbol}_{run_started_at}``: the first accepted save
+``{signal_key}_{ACTIVE.localSymbol}_{run_started_at}``: the first accepted save
 writes the complete frame and later saves append only new rows. A NEXT-only
 futures change does not rotate history.
 
@@ -448,8 +450,8 @@ Custom market-data stores and Signal persistence policies are described in
 .. autoclass:: haymaker.components.PandasSignalModel
    :members: df, row_to_calculation, calculate_signal, create_signal
 
-One-to-one processing
-=====================
+Signal execution processing
+===========================
 
 Binary processors consume Signal and query Book's effective quantity,
 including relevant working orders. Values must be exactly ``-1``, ``0``, or
@@ -479,7 +481,7 @@ CLOSE and ROLL fills do not alter it.
 Portfolio boundaries
 ====================
 
-The dedicated one-to-one flow uses a processor, allocator wrapper, and bracket
+The dedicated signal execution flow uses a processor, allocator wrapper, and bracket
 model:
 
 .. code-block:: text
@@ -489,10 +491,10 @@ model:
        -> PortfolioWrapper(FixedSizeAllocator)
        -> BracketExecutionModel
 
-``PortfolioWrapper`` accepts only PositionProposal, calls the narrow
+``PortfolioWrapper`` accepts only PositionRequest, calls the narrow
 ``PositionAllocator.target_for()`` protocol, and emits at most one target. The
-allocator preserves source, Contract, and metadata; the wrapper owns transfer
-of the proposal's mandatory intent to the target.
+allocator preserves signal, Contract, and metadata; the wrapper owns transfer
+of the request's mandatory intent to the target.
 
 .. autoclass:: haymaker.components.PositionAllocator
    :members: target_for
@@ -503,7 +505,7 @@ of the proposal's mandatory intent to the target.
 .. autoclass:: haymaker.components.PortfolioWrapper
    :members: onData
 
-Account-wide allocation uses a direct Portfolio:
+Account-wide allocation uses a contract Portfolio:
 
 .. code-block:: text
 
@@ -513,33 +515,33 @@ Account-wide allocation uses a direct Portfolio:
        -> SerialTargetExecutionModel
 
 Implement ``process(signal)`` to update Portfolio state and return zero or more
-absolute targets for concrete Contracts. It must omit one-to-one
-``source_key`` and intent. Portfolio owns allocation among expiries: a target
+absolute targets for concrete Contracts. It must omit signal execution
+``signal_key`` and intent. Portfolio owns allocation among expiries: a target
 for NEXT never implicitly reduces a holding in ACTIVE. Emit a separate ACTIVE
-target to reduce it. The optional ``sources`` collection rejects unknown
-Signal source keys. Base Portfolio does not batch, debounce, time out, or
+target to reduce it. The optional ``signal_keys`` collection rejects unknown
+signal keys. Base Portfolio does not batch, debounce, time out, or
 interpret ``as_of``; concrete policies own those decisions.
 
 .. autoclass:: haymaker.components.Portfolio
-   :members: process, positions_for_blueprint
+   :members: process, positions_for_contract_spec
 
 Portfolio accounting and optional state
 ---------------------------------------
 
-Use ``self.book.positions.quantity(contract)`` for filled quantity in an exact
+Use ``self.book.positions.filled_quantity(contract)`` for filled quantity in an exact
 Contract and ``self.book.orders.active(contract=contract)`` for working orders.
-``self.positions_for_blueprint(signal.contract)`` returns filled quantities
-across all registered members of that blueprint, including held past expiries.
+``self.positions_for_contract_spec(signal.contract)`` returns filled quantities
+across all registered members of that contract_spec, including held past expiries.
 The query requires initialized registry membership. Neither desired targets
 nor working quantities are actual fills.
 
-Both execution modes use the same maintained Contract balances. These queries
+Both execution modes use the same maintained Contract positions. These queries
 read current state; they do not scan historical executions or contact IB.
 ``self.book.positions.by_contract()`` returns a new mapping of all non-flat net
-balances by concrete Contract. For individual one-to-one episodes, use
-``self.book.positions.for_source(source_key)`` instead.
+filled positions by concrete Contract. For individual signal execution positions, use
+``self.book.positions.for_signal(signal_key)`` instead.
 
-In direct mode, allocation to each ``source_key`` belongs to your Portfolio.
+In contract mode, allocation to each ``signal_key`` belongs to your Portfolio.
 Net fills cannot determine how much of a combined broker position belongs to
 each input. Keep that allocation mapping yourself.
 
@@ -572,6 +574,13 @@ not a built-in cross-Contract allocation algorithm.
 Execution and routing
 =====================
 
+Each execution model declares which positions it manages. For a custom
+:class:`~haymaker.components.ExecutionModel`, import ``ExecutionMode`` from
+``haymaker.components`` and set the class attribute ``mode = ExecutionMode.SIGNAL``
+or ``mode = ExecutionMode.CONTRACT``. During construction the first model
+establishes ``controller.execution_mode``. Subsequent models must agree, even
+if the strategy trades only stocks or opts out of automatic rolling.
+
 Execution models have stable configured names used for recovery. They persist
 the newest target, inspect Book quantity and working orders, and derive the
 next order rather than replaying stale intent.
@@ -583,17 +592,17 @@ for that Contract, not for its whole futures series. Portfolio chooses which
 Contracts to trade; execution does not substitute another held expiry.
 
 :class:`~haymaker.components.BracketExecutionModel` manages one configured
-``source_key``. Initial targets require consistent intent, same-side non-zero
-resizing is rejected, and each opening episode gets a fresh ``position_id``.
+``signal_key``. Initial targets require consistent intent, same-side non-zero
+resizing is rejected, and each opening position gets a fresh ``position_id``.
 Protective brackets are attached only after the entry is completely filled.
-The stop-loss is critical protection for every established episode; a
+The stop-loss is critical protection for every established position; a
 take-profit is optional and its absence is not a synchronization failure.
 Regular CLOSE orders join the active brackets' OCA group, allowing IB to cancel
 the unfilled protective orders when any exit fills.
 
 If an entry fills completely while Haymaker is offline, its model restores
 missed initial brackets automatically after order/position reconciliation and
-before the configured missing-bracket policy acts. It uses the held episode's
+before the configured missing-bracket policy acts. It uses the held position's
 saved calculation inputs (for example ATR), quantity-weighted execution price,
 and the same configured bracket legs as a live entry. No new Signal or commission
 report is needed. Keep the model's bracket configuration recovery-compatible
@@ -603,7 +612,7 @@ Repeated recovery does not duplicate stops. A surviving take-profit supplies its
 existing OCA group when the initial stop was never installed. An existing stop
 is left untouched, and a missing optional take-profit alone is not repaired.
 Partial entries still wait for complete filling; active closes and rolls keep
-their own sequencing. An already closed episode receives no new brackets.
+their own sequencing. An already closed position receives no new brackets.
 
 This is **initial installation recovery**, not general replacement of protection
 that was previously active and then cancelled, rejected or otherwise lost.
@@ -612,10 +621,10 @@ later broker-maintained state. Those cases retain the configured
 ``controller.missing_brackets`` policy. Missing or inconsistent entry evidence,
 unresolved broker-order attribution, missing Contract ticks, or failed required
 stop submission prevents automatic initial installation; failed recovery during
-Controller reconciliation disables trading and reports the affected source.
+Controller reconciliation disables trading and reports the affected signal.
 
-The model registers that source for Controller-owned futures rolling by
-default. A strategy that intentionally manages its own one-to-one roll can opt
+The model registers that signal for Controller-owned futures rolling by
+default. A strategy that intentionally manages its own signal execution roll can opt
 out at construction time:
 
 .. code-block:: python
@@ -626,8 +635,10 @@ out at construction time:
        auto_roll_futures=False,
    )
 
-Contradictory roll settings for the same ``source_key`` are rejected during
+Contradictory roll settings for the same ``signal_key`` are rejected during
 strategy construction.
+
+.. autoclass:: haymaker.components.ExecutionMode
 
 .. autoclass:: haymaker.components.ExecutionModel
 
@@ -640,13 +651,11 @@ Futures rolling
 
 Controller owns the one daily UTC schedule, stale-holding discovery, and startup
 recovery coordination. It delegates broker work to exactly one process-wide
-:class:`~haymaker.components.FutureRollExecutor` family. Direct and bracket
-accounting cannot be mixed in one process. This matches the supported deployment
-model: a process uses either account-wide direct targets or independently
-managed one-to-one episodes.
+:class:`~haymaker.components.FutureRollExecutor` matching the execution models'
+registered mode. A custom executor must support that same mode.
 
 ContractRegistry supplies the futures-series identity from the registered
-blueprint and qualified contract-detail chain. The default
+contract_spec and qualified contract-detail chain. The default
 :class:`~haymaker.components.PastToActiveRollPolicy` moves only
 ``selector.past_contracts`` into ACTIVE; NEXT and all later eligible expiries
 are retained. FutureRoller persists ``RollState`` before any broker order and never infers
@@ -657,8 +666,8 @@ Custom triggers and destinations
 
 Supply ``roll_policy=`` to either execution model to customize the trigger and
 destination without replacing durable execution. A bracket policy applies to
-its source; a direct policy applies to that model's concrete holdings.
-``auto_roll_futures=False`` remains the one-to-one opt-out. Policies receive a
+its signal; a contract execution policy applies to that model's concrete holdings.
+``auto_roll_futures=False`` remains the signal execution opt-out. Policies receive a
 full selector evaluated at the current check time, without changing the graph's
 ACTIVE/NEXT selection. For example, roll twenty business days before the
 holding's roll day into its successor:
@@ -706,8 +715,8 @@ without reevaluating the policy.
 Durable execution
 ~~~~~~~~~~~~~~~~~
 
-:class:`~haymaker.components.DirectFutureRollExecutor` waits for active
-TARGET_ADJUSTMENT work on both roll endpoints, reads the accounted balance,
+:class:`~haymaker.components.ContractFutureRollExecutor` waits for active
+TARGET_ADJUSTMENT work on both roll endpoints, reads the filled quantity,
 and submits a calendar-spread BAG. A durable target-transfer snapshot makes the
 old target zero and adds its target to the destination. Reapplying that snapshot
 after recovery is idempotent; newer explicit targets supersede it. Holdings in
@@ -717,7 +726,7 @@ other expiries remain independent. Custom executors can override
 An optional Portfolio callback can subscribe to
 ``controller.future_roller.completedEvent``. It receives the completed
 ``RollState`` after Book has accounted for the movement and applied target
-transfers. Use its concrete endpoints to update your source allocation model
+transfers. Use its concrete endpoints to update your signal allocation model
 and save your normalized Portfolio state if required. This notification is not
 a durable message queue: on process recovery, reconcile allocations with Book's
 latest targets and holdings instead of requiring an old callback to replay.
@@ -725,17 +734,17 @@ Ordinary upstream ``targetReachedEvent`` feedback remains a PositionTarget.
 Target verification waits for roll sequencing (within its configured retry
 limit), but does not wait for standing protective stop/take-profit orders.
 
-:class:`~haymaker.components.BracketFutureRollExecutor` preserves
-``source_key`` and ``position_id`` while processing logical episodes serially.
-Because IB exposes only the account net, offsetting logical sources are assigned
+:class:`~haymaker.components.SignalFutureRollExecutor` preserves
+``signal_key`` and ``position_id`` while processing logical positions serially.
+Because IB exposes only the account net, offsetting logical signals are assigned
 deterministically to physical BAG work or to an observed spread-price
-adjustment. After moving an episode, the executor cancels its old protection and
+adjustment. After moving a position, the executor cancels its old protection and
 installs an active replacement stop before advancing. Take-profit replacement
 is optional and best effort.
 
 Before submitting work, bracket rolling waits for OPEN/CLOSE orders of all
-unprocessed sources, then refreshes their quantities and net allocation from
-Book. Episodes that closed while waiting are skipped; changed episode identity
+unprocessed signals, then refreshes their quantities and net allocation from
+Book. Positions that closed while waiting are skipped; changed position identity
 blocks before submission. Completed logical offsets are preserved; if changed
 remaining quantities cannot represent that offset safely, the roll blocks for
 review instead of submitting an inconsistent BAG.
@@ -746,7 +755,7 @@ compatible:
 
 .. code-block:: python
 
-   roll_executor = DirectFutureRollExecutor(name="index_future_roll")
+   roll_executor = ContractFutureRollExecutor(name="index_future_roll")
    execution = SerialTargetExecutionModel(
        name="index_targets",
        future_roll_executor=roll_executor,
@@ -761,11 +770,9 @@ until it completes or is reviewed.
 .. autoclass:: haymaker.components.FutureRollExecutor
    :members: holdings, create_state, advance, recover
 
-.. autoclass:: haymaker.components.DirectFutureRollExecutor
+.. autoclass:: haymaker.components.ContractFutureRollExecutor
 
-.. autoclass:: haymaker.components.BracketFutureRollExecutor
-
-.. autoclass:: haymaker.components.FutureRollMode
+.. autoclass:: haymaker.components.SignalFutureRollExecutor
 
 .. autoclass:: haymaker.components.FutureRollStage
 
@@ -778,15 +785,15 @@ until it completes or is reviewed.
 Router rules are fixed and evaluated in declaration order; first match wins.
 Without a default, unmatched targets fail closed. Current rules always select
 the model; persisted ownership never overrides them. Before recovery, every
-active direct ``TARGET_ADJUSTMENT`` must still select the model that submitted
+active contract ``TARGET_ADJUSTMENT`` must still select the model that submitted
 it. A mismatch, ambiguous ownership, missing target state, or unroutable target
 blocks that Router locally. It does not cancel orders or disable Controller
-trading, and one-to-one bracket roles are outside this check.
+trading, and signal execution bracket roles are outside this check.
 
 Held quantity and idle targets do not pin an old model. Startup computes all
-idle direct-target reassignments from current rules before applying any of
+idle contract-target reassignments from current rules before applying any of
 them, then starts the models. Custom predicates used for recoverable execution
-must therefore be deterministic from persisted TargetState fields:
+must therefore be deterministic from persisted ContractTarget fields:
 Contract, target quantity, and target creation time. Metadata is
 unavailable during reconstruction. Reusing a configured model name across deployments asserts
 that the implementation and configuration remain recovery-compatible. Final
@@ -834,67 +841,65 @@ to ``atr`` and must be present in PositionTarget metadata.
 Book and Controller ownership
 =============================
 
-:class:`~haymaker.book.Book` owns typed order, Fill, PositionState, TargetState,
-RollState, ContractPosition balances, Portfolio recovery state, stopped-direction
-state, and blotter access. Both modes read the same contract-level balances,
-updated as episode, order and roll records change. During a bracket roll,
-physical movement remains distinct from serial episode updates so quantities
-are not counted twice.
-
-Query the collection that owns the state you need:
+:class:`~haymaker.book.Book` owns order evidence, filled positions, accepted
+targets, saved protection inputs, rolls and optional blotter access. The
+:doc:`terminology` reference distinguishes their scopes. Both execution families
+read the same maintained contract positions; opposite signal positions can net
+to zero without losing their individual attribution.
 
 .. code-block:: python
 
-   episode = self.book.positions.for_source("breakout")  # None if unknown
-   sources = self.book.positions.source_states()  # read-only source -> state
-   quantity = self.book.positions.quantity(contract)  # filled net, excluding orders
-   holdings = self.book.positions.by_contract()  # non-flat Contract -> quantity
+   position = self.book.positions.for_signal("breakout")  # SignalPosition or None
+   positions = self.book.positions.by_signal()  # signal key -> SignalPosition
+   held = self.book.positions.for_contract(contract)  # ContractPosition or None
+   quantity = self.book.positions.filled_quantity(contract)  # zero if unknown
+   holdings = self.book.positions.by_contract()  # non-flat Contract -> filled quantity
+   signal_target = self.book.targets.for_signal("breakout")
+   contract_target = self.book.targets.for_contract(contract)
+   protection = self.book.protection.for_signal("breakout")
    working = self.book.orders.active(contract=contract)
    order = self.book.orders.by_id(order_id)  # permId fallback: by_perm_id(...)
-   target = self.book.targets.for_contract(contract)
    roll = self.book.rolls.for_series(series_key)
 
-Source states describe one-to-one episodes; they are not inferred per-source
-allocations for a direct Portfolio. ``source_states_for_contract(contract)``
-returns the non-flat episodes for a concrete Contract, while ``quantity`` nets
-all accounted holdings. ``Book.effective_quantity(source_key)`` includes relevant
-working episode orders when that is the desired view.
+``signal_positions_for_contract(contract)`` returns non-flat attributed positions
+for one concrete Contract. Futures expiries remain separate in aggregate queries;
+stocks use the same contract queries. ``Book.effective_quantity(signal_key)``
+adds relevant working orders to that signal's filled quantity.
 
-Book coordinates accounting writes such as ``apply_fill``, ``update_position``,
-``update_target`` and ``update_roll``. Do not mutate a returned live OrderInfo or
-call collection-private mutation hooks to bypass these operations. Each owner
-keeps its record codecs and persistence semantics nearby, but all use the same
-ordered writer. A custom Portfolio may save opaque normalized recovery mappings
-through ``book.portfolios.save(key, mapping)`` and ``load(key)``; this does not
-make its allocation policy part of Book.
+Use coordinated Book mutations: ``apply_fill``, ``update_position``,
+``update_signal_target``, ``update_target``, ``correct_signal_position`` and
+``update_roll``. Do not mutate live OrderInfo records or call collection-private
+mutation hooks. A custom Portfolio can save opaque normalized recovery mappings
+with ``book.portfolios.save(key, mapping)`` and ``load(key)``.
 
-Book persists balances in the existing ``state`` collection under
-``balance:{conId}``, after the records establishing them in its critical
-``DRAIN`` queue. Startup verifies the balances once against saved accounting
-records, reconstructing missing or inconsistent totals after interrupted writes.
-These startup repairs complete synchronously before the runtime starts its loop;
-subsequent mutations use the configured persistence queue.
-Injected ``AbstractBaseSaver`` backends must raise on failed writes and return
-timezone-aware datetimes. Framework Book Mongo savers request aware UTC decoding
-without changing the shared Mongo client's settings.
-Saved one-to-one corrections remain authoritative; offline executions are still
-accounted by Controller synchronization. No historical replay occurs in ordinary
-position queries. Book performs no broker calls or Portfolio allocation.
-Source positions persist their applied-fill checkpoint with their quantity.
-Startup completes a received fill whose position write was interrupted without
-reapplying older fills over a correction. Critical persistence stops on its first
-failed write; new broker submissions are rejected while that writer is unavailable.
-Records created without source fill checkpoints require the standalone converter;
-conversion takes the selected saved position as the accounting baseline and does
-not infer corrections from historical fills. Review/reconcile that baseline first.
-An explicit state clear stores a per-target
-Fill-evidence cutoff: historical orders and Fills remain available, but
-pre-reset executions cannot recreate a cleared direct position after restart.
-Fills that actually arrive after the clear are still accounted.
-Rebinding retains the previous broker IDs and persistence priority so a reconnect
-cannot duplicate an order's fills or discard new evidence because its live Trade
-has a shorter status log. Both roll modes account explicit combo-leg evidence in
-place of the BAG fallback, never in addition to it.
+All order and state documents require ``schema_version: 1``. Book checks every
+loaded version before recovery; older documents require standalone conversion.
+The physical collections remain ``orders``, ``state`` and ``blotter``. State
+identities and matching ``state_type`` values are ``signal_execution:{signal_key}``,
+``contract_position:{conId}``, ``contract_execution:{conId}``,
+``roll:{series_key}`` and ``portfolio:{portfolio_key}``.
+
+SignalPosition, SignalTarget and ProtectionState share one internal recovery
+envelope. Its direction block and applied-fill checkpoint are persisted with
+all three records in one flat document. Protective flattening updates filled
+exposure, clears the target opening and checkpoints the fill together. A reversal
+keeps held protection inputs separate from the next opening's inputs.
+Contract targets share an internal document with their reset cutoff and tombstone.
+Historical evidence remains available after reset; pre-reset fills cannot restore
+cleared exposure, while fills arriving after the clear are still accounted.
+
+One ordered critical ``DRAIN`` writer saves order evidence before dependent state
+and contract positions. Its first failed write stops dependent work and prevents
+new broker submissions. Startup completes missing fill effects exactly once,
+then rebuilds contract positions from durable records without undoing accepted
+corrections. Ordinary queries never replay fills. BAG fallback and explicit roll
+legs represent the same movement and are never counted twice.
+
+Injected ``AbstractBaseSaver`` backends must raise on failure and return aware
+UTC datetimes. Startup repairs complete before the runtime loop starts.
+Rebinding preserves old broker IDs and persistence priority; late commissions
+remain durable even without blotter output. Book performs no broker calls or
+Portfolio allocation.
 
 .. _account-reset:
 
@@ -937,7 +942,7 @@ A cached quantity mismatch defers discovery and requests reconciliation; it
 does not create a permanently blocked roll from the cache alone.
 
 With ``missing_brackets=remove``, required protection is checked against the
-episode's contract, side, identity and remaining stop quantity. Optional
+position's contract, side, identity and remaining stop quantity. Optional
 take-profit absence is permitted. Emergency closes share the surviving exits'
 OCA group. Incompatible exits must first confirm cancellation within
 ``broker_request_timeout``; otherwise reconciliation fails without submitting
@@ -968,7 +973,7 @@ local attempt. A disappeared partially filled order requires terminal broker
 history: partial execution evidence is accounted, but cannot prove cancellation
 of its remainder. Missing terminal evidence fails reconciliation explicitly.
 
-Submission metadata (role, model name, optional source/episode strings and
+Submission metadata (role, model name, optional signal/position strings and
 params mapping) is validated before the broker is called, including emergency
 submissions. Invalid metadata cannot leave an accepted unregistered order.
 Health checks accept callable objects and partials as well as functions. One
@@ -979,18 +984,18 @@ suppressed until that checker succeeds, then reported if it fails again.
 periodic synchronization:
 
 * ``fail`` (default): an unexplained mismatch fails reconciliation and disables
-  trading without inferring changes to Book positions, targets or episode
-  inputs. Diagnostics include conId, Book/broker quantities, source quantities,
+  trading without inferring changes to Book positions, targets or position
+  inputs. Diagnostics include conId, Book/broker quantities, signal quantities,
   active orders and roll context. Startup does not start strategy jobs; a
   failure during operation ends strategy jobs and the supervised workload.
   This does not cancel broker orders or liquidate holdings. Existing orders can
   still fill, and broker callbacks continue accounting while connected.
-* ``correct``: opt into the existing one-to-one correction rules. A sole
-  holding source absorbs the difference; broker-flat can flatten several
-  sources. Correction aligns targets to the resulting quantities and clears
-  episode recovery inputs when flat. It must be followed by a clean fresh
+* ``correct``: opt into the existing signal execution correction rules. A sole
+  holding signal absorbs the difference; broker-flat can flatten several
+  signals. Correction aligns targets to the resulting quantities and clears
+  position recovery inputs when flat. It must be followed by a clean fresh
   pass; ambiguous or unrecoverable state still fails. This is not a general
-  repair mechanism for direct execution or corporate actions.
+  repair mechanism for contract execution or corporate actions.
 
 For deployments that intentionally accept inferred corrections:
 
@@ -1005,14 +1010,14 @@ may require coordinated changes to contract identities, targets and protection.
 The policy controls mismatch-derived corrections, not genuine fill/commission
 accounting, order rebinding, startup projection repair or the existing
 manual/unknown-fill attribution rules. Matching net quantities alone cannot
-verify source attribution or detect every external event.
+verify signal attribution or detect every external event.
 
 After failure, stop the application and let its critical persistence queue
 drain before backing up and repairing the database. Correct authoritative
-records coherently: one-to-one source quantity, target, held/pending Contracts,
-episode/protection inputs and fill checkpoints, plus related orders, rolls or
-Portfolio state where applicable. Do not edit only ``balance:{conId}``: startup
-rebuilds balances from accounting records. Direct holdings derive from order/fill
+records coherently: signal position filled quantity, target, held/pending Contracts,
+position/protection inputs and fill checkpoints, plus related orders, rolls or
+Portfolio state where applicable. Do not edit only ``contract_position:{conId}``: startup
+rebuilds contract positions from accounting records. Contract execution holdings derive from order/fill
 evidence and cutoffs; arbitrary external adjustments need a separately designed
 durable representation, not fabricated fills.
 
@@ -1026,9 +1031,13 @@ latch. The default policy will fail again if the repaired state still disagrees.
 
 .. autoclass:: haymaker.book.FillRecord
 
-.. autoclass:: haymaker.book.PositionState
+.. autoclass:: haymaker.book.SignalPosition
 
-.. autoclass:: haymaker.book.TargetState
+.. autoclass:: haymaker.book.SignalTarget
+
+.. autoclass:: haymaker.book.ProtectionState
+
+.. autoclass:: haymaker.book.ContractTarget
 
 .. autoclass:: haymaker.book.ContractPosition
 
@@ -1036,13 +1045,13 @@ latch. The default policy will fail again if the repaired state still disagrees.
    :members: by_id, by_perm_id, query, active
 
 .. autoclass:: haymaker.book.positions.PositionStore
-   :members: for_source, source_states, source_states_for_contract, quantity, by_contract
+   :members: for_signal, for_contract, by_signal, signal_positions_for_contract, filled_quantity, by_contract
 
 .. autoclass:: haymaker.book.targets.TargetStore
-   :members: for_contract, all
+   :members: for_signal, for_contract, all
 
 .. autoclass:: haymaker.book.rolls.RollStore
-   :members: for_series, for_source, for_contract, all
+   :members: for_series, for_signal, for_contract, all
 
 .. autoclass:: haymaker.book.portfolio.PortfolioStateStore
    :members: save, load
@@ -1050,8 +1059,12 @@ latch. The default policy will fail again if the repaired state still disagrees.
 .. autoclass:: haymaker.controller.Controller
    :members: trade, cancel
 
+.. _state-conversion:
+
 State conversion
 ================
+
+See :doc:`naming-migration` for strategy edits and the saved-field rename reference.
 
 The standalone converter is dry-run by default and never modifies its source.
 Select the actual legacy snapshot collection from the old profile's
@@ -1072,7 +1085,7 @@ operator-owned prerequisite; the converter does not connect to the broker or
 verify that a process has stopped. It is mandatory with ``--apply``. A preliminary
 dry-run may omit it, but must be repeated against the settled source.
 
-Inspect the count, P&L, broker identifier, source/episode and restored-position
+Inspect the count, P&L, broker identifier, signal/position and restored-position
 report. Add ``--apply`` to the same command only after accepting that report and
 selecting a fresh, distinct target database. The converter writes ``orders``,
 ``state`` and ``blotter`` there; no collection suffixes are needed across separate
@@ -1088,9 +1101,9 @@ runtime records without migration metadata can coexist with converted records.
 
 The converter accepts legacy strategy snapshots or component ``state`` records,
 not a mixture of both. It preserves complete Trade diagnostics and authoritative
-explicit Fill/CommissionReport evidence. Older one-to-one records without
-separate held/pending Contracts are reconciled to episode order evidence;
-missing or ambiguous evidence is refused. Direct keyed records convert only
+explicit Fill/CommissionReport evidence. Older signal execution records without
+separate held/pending Contracts are reconciled to position order evidence;
+missing or ambiguous evidence is refused. Legacy keyed records convert only
 when their held and working exposure belongs to the target's concrete Contract.
 Multiple old targets mapping to one conId require an explicit allocation
 decision before conversion. Finish pending rolls under the old implementation
@@ -1098,15 +1111,15 @@ before changing their schema. Existing non-empty databases produced by another
 converter version are incompatible targets.
 
 Legacy conversion preserves the latest authoritative quantity, direction block,
-episode identity and original bracket inputs, with ``legacy:<source_key>`` model
-names. The adapted strategy must use those names and the same source keys.
+position identity and original bracket inputs, with ``legacy:<signal_key>`` model
+names. The adapted strategy must use those names and the same signal keys.
 Settled targets equal held quantities. Historical fills and legacy accounting
-keys become source checkpoints, preserving reconciled corrections instead of
+keys become signal checkpoints, preserving reconciled corrections instead of
 replaying history over the snapshot. Newer or explicitly unaccounted fills,
-missing snapshot sources, duplicate identities, multiple accounts and working
-non-protective orders are refused. Each held legacy episode must have exactly
+missing snapshot signals, duplicate identities, multiple accounts and working
+non-protective orders are refused. Each held legacy position must have exactly
 one matching active stop; optional take-profits must match its quantity,
-Contract, direction, episode and OCA group. Missing old trailing stops are not
+Contract, direction, position and OCA group. Missing old trailing stops are not
 reconstructed. Zero broker order IDs and contradictory persisted active/status
 evidence need explicit repair before conversion; no broker identities or final
 statuses are invented.
@@ -1119,9 +1132,9 @@ fill after the old runtime stops must be recovered by the new runtime before
 strategy startup. Run only one runtime against the account.
 
 The report distinguishes optional blotter totals from deduplicated Fill-level
-commission/P&L totals and includes source/episode order grouping even when
+commission/P&L totals and includes signal/position order grouping even when
 blotter writing was disabled. No live schema fallback or dual writes exist.
-Derived balance documents are not copied by the converter: Book reconstructs
+Derived contract position documents are rebuilt during validation: Book reconstructs
 them from the converted accounting records at startup.
 
 All old snapshot history and additional legacy fields remain in the source

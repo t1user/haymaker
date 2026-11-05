@@ -48,20 +48,20 @@ def test_readonly_mapping_copies_only_the_top_level():
 
 
 def test_non_empty_string_distinguishes_type_and_value_errors():
-    assert non_empty_string("alpha", "source_key") == "alpha"
-    with pytest.raises(TypeError, match="source_key must be a string"):
-        non_empty_string(1, "source_key")
-    with pytest.raises(ValueError, match="source_key must not be empty"):
-        non_empty_string("", "source_key")
+    assert non_empty_string("alpha", "signal_key") == "alpha"
+    with pytest.raises(TypeError, match="signal_key must be a string"):
+        non_empty_string(1, "signal_key")
+    with pytest.raises(ValueError, match="signal_key must not be empty"):
+        non_empty_string("", "signal_key")
 
 
-def test_contract_validation_distinguishes_blueprints_from_concrete_contracts():
-    blueprint = ibi.Future(symbol="ES")
+def test_contract_validation_distinguishes_contract_specs_from_concrete_contracts():
+    contract_spec = ibi.Future(symbol="ES")
     concrete = ibi.Future(conId=1, symbol="ES")
 
-    assert ib_contract(blueprint) is blueprint
+    assert ib_contract(contract_spec) is contract_spec
     assert qualified_contract(concrete) is concrete
     with pytest.raises(TypeError, match="ib_insync.Contract"):
         ib_contract("ES")
     with pytest.raises(ValueError, match="non-zero conId"):
-        qualified_contract(blueprint)
+        qualified_contract(contract_spec)

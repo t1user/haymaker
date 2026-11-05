@@ -22,7 +22,7 @@ The live execution side is built around `Atom` pipelines. `Atom` is an
 arbitrary-message composition primitive providing validated event wiring,
 contract lookup, and shared access to process-owned runtime services. The
 pre-built trading toolbox lives under `haymaker.components` and communicates
-through frozen `Signal`, `PositionProposal`, and absolute `PositionTarget`
+through frozen `Signal`, `PositionRequest`, and absolute `PositionTarget`
 message envelopes.
 
 Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
@@ -39,14 +39,14 @@ Live runtime services are assembled in `haymaker/runtime.py` by `LiveRuntime`:
 holds only ready runtime services, process `run_started_at`, supervised
 `workload_generation`, the narrow `FrameStoreProvider` composition capability,
 the cached market-data store factory, the per-model default Signal persistence
-factory, the supervisor restart callback, and one-to-one source futures-roll
+factory, the supervisor restart callback, and signal execution futures-roll
 policies; it
 does not construct services or inspect the user module.
 
 The `haymaker` console command owns live composition and logging: it configures
 Haymaker, starts threaded logging handlers, creates `LiveRuntime`, and imports
 the user strategy module so module-level pipelines are built against its
-already-installed `RuntimeContext`. SignalModels register Contract blueprints
+already-installed `RuntimeContext`. SignalModels register Contract specifications
 as they are constructed but do not own futures-roll policy. Strategy module
 code may use the provider to build fully configured dataframe stores and inject
 them into consumers. The CLI then hands the composed runtime to the shared
@@ -55,10 +55,10 @@ daily UTC futures-roll timers once on the active event loop when
 `Controller.run()` first executes. Live and dataloader runtimes use the same
 application and supervisor lifecycle.
 
-Execution models register one process-wide mode-specific futures-roll executor.
-`BracketExecutionModel` also registers each source policy; automatic rolling is
-the default and explicit opt-out is available for a source that manages its own
-roll. Direct and one-to-one modes are intentionally exclusive per process.
+Execution models register their mode with Controller during construction. Built-in models share one futures-roll executor selected for that mode.
+`BracketExecutionModel` also registers each signal policy; automatic rolling is
+the default and explicit opt-out is available for a signal that manages its own
+roll. Contract and signal execution modes are intentionally exclusive per process.
 
 The dataloader is a separate command-line path. It connects to IB, schedules historical-data tasks, observes IB pacing restrictions, and writes pandas frames through the async datastore interface. `DataloaderRuntime` decomposes the merged `download` mapping across `Manager` request policy and `DataloaderSession` worker count, owns Mongo/Arctic composition, and injects datastore construction into `Manager`. `Manager` owns the run-scoped `now` and derives the library from data type and bar size, while contract selectors share a target-owned `FuturesSelectionPolicy`. Arctic is the only supported dataloader backend.
 
@@ -123,32 +123,32 @@ The research package is intentionally separate from live execution. It works dir
   share liquidation-order construction. Controller owns registered broker
   submission and startup's verified-reset state clearing.
 - `haymaker/trader.py`: thin order placement/cancel/modify wrapper around `ib_insync.IB`.
-- `haymaker/book/`: typed order/fill evidence, one-to-one PositionState
-  separating held Contract/bracket inputs from pending-target Contract/inputs,
-  conId-keyed direct TargetState, per-series RollState, maintained conId-keyed
-  ContractPosition balances shared by both execution modes, durable reset cutoffs,
+- `haymaker/book/`: typed order/fill evidence, SignalPosition, SignalTarget and ProtectionState
+  coordinated by internal SignalExecutionState with one flat persistence document,
+  conId-keyed ContractTarget, per-series RollState, maintained conId-keyed
+  ContractPosition records shared by both execution modes, durable reset cutoffs,
   Portfolio recovery mappings, rejection tracking, active-order ownership queries,
   blotter access,
-  and one ordered critical persistence queue. Balance queries read current state;
-  reconstruction verifies/repairs balances at startup and explicit reset.
+  and one ordered critical persistence queue. Filled-position queries read current state;
+  reconstruction verifies/repairs contract positions at startup and explicit reset.
   Each named module owns its records, codecs, queries and persistence semantics:
   `orders.py`, `positions.py`, `targets.py`, `rolls.py`, `portfolio.py`.
   `persistence.py` owns the single shared fail-stop writer, not domain CRUD.
   `core.py` coordinates accounting mutations, one-pass restoration and projection
   repair. Callers query the named Book owners; accounting mutations remain Book
-  operations. SyncCoordinator chooses safe corrections and PositionState defines
+  operations. SyncCoordinator chooses safe corrections and SignalExecutionState defines
   their field changes. Book performs no broker calls or allocation.
 - `haymaker/validators.py`: shared primitive normalization for aware datetimes,
   finite numbers, read-only mapping copies, non-empty strings, and IB Contract
   identity, plus IB request/order field validators. Domain-specific validation
   remains with the owning component.
 
-ContractRegistry snapshots blueprint declarations and maps all qualified
-members back to them. `blueprint_for`, `contracts_for`, and `get_selector`
+ContractRegistry snapshots contract_spec declarations and maps all qualified
+members back to them. `contract_spec_for`, `contracts_for`, and `get_selector`
 accept either form; overlapping declarations fail atomically. Atom exposes
-`contract_blueprint` separately from its dynamically resolved `contract`.
+`contract_spec` separately from its dynamically resolved `contract`.
 SignalModels customize the envelope Contract via `select_signal_contract`.
-Portfolio provides a blueprint-grouped filled-position query and the optional
+Portfolio provides a contract_spec-grouped filled-position query and the optional
 PortfolioStateMixin for explicit normalized recovery mappings. Execution
 completion travels through targetReachedEvent and reverse Atom feedback;
 Router forwards it without taking ownership of Portfolio allocation policy.
@@ -157,7 +157,7 @@ Router forwards it without taking ownership of Portfolio allocation policy.
 ### Strategy Pipeline Components
 
 - `haymaker/components/messages.py`: frozen scalar-or-paired `Signal`,
-  `SignalPair`, `PositionProposal`, and absolute `PositionTarget` messages plus
+  `SignalPair`, `PositionRequest`, and absolute `PositionTarget` messages plus
   signal, intent, and open-ended order role enums. Message metadata is copied
   only at the top level; contained Contracts and nested values remain shared.
 - `haymaker/components/streamers.py`: broker market-data sources. A persisted
@@ -175,22 +175,22 @@ Router forwards it without taking ownership of Portfolio allocation policy.
   framework-owned Signal envelope and public SignalCalculation result boundary,
   plus dataframe-based PandasSignalModel with configurable row metadata and
   optional ordered calculation-data persistence.
-- `haymaker/components/signal_processors.py`: scalar and paired one-to-one
+- `haymaker/components/signal_processors.py`: scalar and paired signal execution
   binary processors implementing STATE/EVENT, configurable opposing-signal,
   entry/exit, and stopped-direction lock semantics.
-- `haymaker/components/portfolio.py`: direct account-wide Portfolio,
-  one-to-one PortfolioWrapper, and PositionAllocator boundary.
+- `haymaker/components/portfolio.py`: contract execution Portfolio,
+  signal execution PortfolioWrapper, and PositionAllocator boundary.
 - `haymaker/components/execution/`: public execution subpackage. Its initializer
   aggregates the leaf modules' exports for both focused imports and promotion
   through `haymaker.components`.
   - `models.py`: the common stateful execution-model boundary and serial
     concrete-Contract convergence.
   - `router.py`: fixed first-match target routing plus startup validation that
-    active direct adjustments are still assigned to their persisted owners.
-  - `brackets.py`: one-to-one bracket episode execution and its
-    user-configurable protective-order legs. Regular closes join the episode's
+    active contract adjustments are still assigned to their persisted owners.
+  - `brackets.py`: signal execution bracket position execution and its
+    user-configurable protective-order legs. Regular closes join the position's
     OCA group, keeping stop protection active until an exit fills.
-  - `future_roll.py`: public direct and bracket roll executors plus their
+  - `future_roll.py`: public contract and signal roll executors plus their
     typed customization boundary; Controller retains discovery and scheduling.
 - `haymaker/components/__init__.py`: registers public component modules and
   aggregates their module-owned, non-overlapping `__all__` exports into the
@@ -344,11 +344,11 @@ reference and never suppresses the Signal.
    mismatches are eligible for `correct`, the coordinator can ask the controller
    to request one supervised workload restart before local order pruning,
    broker order cancellation, or position correction is allowed on a later
-   pass. Applied one-to-one correction also aligns the persisted target to the
-   authoritative quantity and clears episode recovery inputs when flat, so a
+   pass. Applied signal execution correction also aligns the persisted target to the
+   authoritative quantity and clears position recovery inputs when flat, so a
    supervised recovery cannot reopen the corrected position from a stale
    setpoint. Once orders and positions are reconciled, Controller resumes
-   persisted rolls and invokes source-registered model protection hooks before
+   persisted rolls and invokes signal-registered model protection hooks before
    missing-bracket remediation.
    BracketExecutionModel shares live and recovery installation, using saved held
    inputs and normalized quantity-weighted entry executions. Existing stops
@@ -372,15 +372,15 @@ reference and never suppresses the Signal.
    into ACTIVE. Qualified detail chains explicitly map each
    concrete Future to its registered series; symbol guessing is not used.
 6. Streamers and aggregators emit market data into SignalModels. Custom models
-   calculate only a SignalCalculation; the base supplies source, resolved
+   calculate only a SignalCalculation; the base supplies signal, resolved
    Contract, SignalType, and local creation time.
 7. SignalModels emit immutable raw Signals. Observation `as_of` remains distinct
    from `created_at`, including for IB's left-labelled bars. PandasSignalModel
-   may persist a calculation generation named from source, ACTIVE contract, and
+   may persist a calculation generation named from signal, ACTIVE contract, and
    process start; NEXT-only changes do not rotate it.
-8. In the one-to-one flow, a binary processor emits PositionProposal and
-   PortfolioWrapper allocates one source-attributed absolute PositionTarget. In
-   direct mode, Portfolio owns input state and may emit targets for several
+8. In the signal execution flow, a binary processor emits PositionRequest and
+   PortfolioWrapper allocates one signal-attributed absolute PositionTarget. In
+   contract mode, Portfolio owns input state and may emit targets for several
    Contracts; every target is the absolute setpoint for its concrete conId.
 9. ExecutionRouter optionally selects one stable named model using current
    first-match rules. Before model recovery, active TARGET_ADJUSTMENT ownership
@@ -388,12 +388,12 @@ reference and never suppresses the Signal.
    recovered targets are reassigned only after every target can be routed.
 10. Execution models persist the newest target, derive required work from Book
     quantity and working orders, and call `Controller.trade()` with explicit
-    role/model and direct-target or source/episode attribution. They register
-    exactly one process-wide direct or bracket futures-roll executor family.
+    role/model and contract-target or signal/position attribution. They register
+    exactly one process-wide contract or signal futures-roll executor family.
 11. Controller registers complete OrderInfo immediately, applies normalized
     Fill evidence idempotently, attaches late CommissionReports regardless of
     optional blotter configuration, updates Book projections, rebinds Trades,
-    and sends source/position-attributed blotter records when enabled. The
+    and sends signal/position-attributed blotter records when enabled. The
     global `controller.missing_brackets` option controls critical stop-loss
     reconciliation; take-profit orders are optional.
 12. The app-lifetime futures-roll timer asks FutureRoller to evaluate policies.
@@ -403,10 +403,10 @@ reference and never suppresses the Signal.
     back-reports Fill evidence and resumes incomplete roll stages before
     comparing Book with the broker snapshot. Completed schedule occurrence
     markers prevent repeated fixed-schedule rolls, including after restart.
-    Bracket execution waits for OPEN/CLOSE work across all unprocessed sources,
-    then refreshes quantities and net allocation before submission. Flat sources
+    Bracket execution waits for OPEN/CLOSE work across all unprocessed signals,
+    then refreshes quantities and net allocation before submission. Flat signals
     are skipped with attribution retained. Already processed logical offsets
-    cannot be discarded; incompatible episode changes or remaining net block
+    cannot be discarded; incompatible position changes or remaining net block
     before further broker work.
 
 ### Dataloader Flow
@@ -622,7 +622,7 @@ dataloader contracts.csv -f settings.yaml
   propagate with trading disabled.
 - Final live-runtime close warns about active TARGET_ADJUSTMENT orders. Treat
   the recorded model name as a recovery-compatibility promise and defer routing
-  or implementation changes until those direct orders are terminal.
+  or implementation changes until those contract adjustment orders are terminal.
 - Futures rolling changes concrete holdings, target/position recovery, and
   bracket protection. Preserve the registered mode and executor name while a
   RollState is incomplete. Missing Fill evidence or critical stop replacement
@@ -632,7 +632,7 @@ dataloader contracts.csv -f settings.yaml
 
 ## AGENTS.md Notes
 
-Agent guidance records current contracts, not design proposals or checkpoint
+Agent guidance records current contracts, not design requests or checkpoint
 history. Keep common ownership and safety rules at project level and detailed
 extension rules in the owning package:
 

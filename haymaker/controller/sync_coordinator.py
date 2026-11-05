@@ -375,16 +375,18 @@ class SyncCoordinator:
         for contract, difference in errors.items():
             broker_quantity = broker_positions.get(contract, 0.0)
             roll = self.controller.book.rolls.for_contract(contract)
-            states = self.controller.book.positions.source_states_for_contract(contract)
+            states = self.controller.book.positions.signal_positions_for_contract(
+                contract
+            )
             log.critical(
                 "Position mismatch: conId=%s symbol=%s Book=%s broker=%s "
-                "policy=%s sources=%s active_orders=%s roll=%s",
+                "policy=%s signals=%s active_orders=%s roll=%s",
                 contract.conId,
                 contract.localSymbol or contract.symbol,
                 broker_quantity + difference,
                 broker_quantity,
                 self.controller.position_mismatch_policy,
-                {state.source_key: state.quantity for state in states},
+                {state.signal_key: state.filled_quantity for state in states},
                 [
                     (info.orderId, info.role)
                     for info in self.controller.book.orders.active(contract=contract)
@@ -403,43 +405,39 @@ class SyncCoordinator:
             raise PositionsOutOfSync("Automatic position correction is disabled")
         log.error("Will attempt to fix position records")
         for contract, diff in errors.items():
-            states = self.controller.book.positions.source_states_for_contract(contract)
+            states = self.controller.book.positions.signal_positions_for_contract(
+                contract
+            )
             corrected_at = datetime.now(timezone.utc)
             log.debug(
-                "Sources for contract %s: %s",
+                "Signals for contract %s: %s",
                 contract.localSymbol,
-                [state.source_key for state in states],
+                [state.signal_key for state in states],
             )
             if len(states) == 1:
                 state = states[0]
-                self.controller.book.update_position(
-                    state.corrected(
-                        state.quantity - diff,
-                        corrected_at,
-                    )
+                self.controller.book.correct_signal_position(
+                    state.signal_key, state.filled_quantity - diff, corrected_at
                 )
                 log.error(
-                    "Corrected position records for source %s by %s",
-                    state.source_key,
+                    "Corrected position records for signal %s by %s",
+                    state.signal_key,
                     -diff,
                 )
 
             elif states and broker_positions.get(contract, 0.0) == 0:
                 for state in states:
-                    self.controller.book.update_position(
-                        state.corrected(
-                            0.0,
-                            corrected_at,
-                        )
+                    self.controller.book.correct_signal_position(
+                        state.signal_key, 0.0, corrected_at
                     )
                 log.error(
                     "Position records zeroed for %s to reflect broker flat.",
-                    [state.source_key for state in states],
+                    [state.signal_key for state in states],
                 )
             elif states:
                 raise PositionsOutOfSync(
-                    f"Ambiguous source attribution for conId={contract.conId}; "
-                    "missing orders do not establish source exposure"
+                    f"Ambiguous signal attribution for conId={contract.conId}; "
+                    "missing orders do not establish signal exposure"
                 )
 
             else:

@@ -21,7 +21,7 @@ log = getLogger(__name__)
 
 ContractKey: TypeAlias = str
 # this is an unqualified contract (no conId) that can't be hashed
-Blueprint: TypeAlias = ibi.Contract
+ContractSpec: TypeAlias = ibi.Contract
 
 
 class DetailsContainer(UserDict):
@@ -34,7 +34,7 @@ class ContractRegistry:
     futures_roll_bdays: int = 3
     futures_roll_margin_bdays: int = 3
     # mapping of contract object saved on Atom instance to hash used by ContractRegistry
-    _blueprints: dict[ContractKey, ibi.Contract] = field(
+    _contract_specs: dict[ContractKey, ibi.Contract] = field(
         default_factory=dict, init=False, repr=False
     )
     _selectors: dict[ContractKey, AbstractBaseContractSelector] = field(
@@ -47,7 +47,7 @@ class ContractRegistry:
     today: datetime | None = None  # for testing only
 
     @staticmethod
-    def hash_contract(contract: Blueprint) -> ContractKey:
+    def hash_contract(contract: ContractSpec) -> ContractKey:
         # hashing method can be changed, potential alternatives:
         # return tuple(ibi.util.dataclassNonDefaults(contract).items())
         # return hash(contractAsTuple(contract))
@@ -57,37 +57,39 @@ class ContractRegistry:
     def _today(self) -> datetime:
         return self.today or utc_now_naive()
 
-    def register_blueprint(self, blueprint: Blueprint) -> None:
+    def register_contract_spec(self, contract_spec: ContractSpec) -> None:
         """Capture an unchanging declaration; identical declarations share it."""
-        self._blueprints.setdefault(self.hash_contract(blueprint), deepcopy(blueprint))
+        self._contract_specs.setdefault(
+            self.hash_contract(contract_spec), deepcopy(contract_spec)
+        )
 
-    def blueprint_key(self, contract: ibi.Contract) -> ContractKey:
+    def contract_spec_key(self, contract: ibi.Contract) -> ContractKey:
         """Identify a registered declaration or one of its qualified members.
 
         Raises:
-            KeyError: If no registered blueprint owns the Contract. Membership
+            KeyError: If no registered contract_spec owns the Contract. Membership
                 comes from qualification, never from guessed symbol matching.
         """
         key = self.hash_contract(contract)
-        if key in self._blueprints:
+        if key in self._contract_specs:
             return key
         try:
             return self._series_by_con_id[contract.conId]
         except KeyError as exc:
-            raise KeyError(f"No registered blueprint owns {contract!r}") from exc
+            raise KeyError(f"No registered contract_spec owns {contract!r}") from exc
 
-    def blueprint_for(self, contract: ibi.Contract) -> Blueprint:
-        """Return a copy of the declaration owning a blueprint or qualified member."""
-        return deepcopy(self._blueprints[self.blueprint_key(contract)])
+    def contract_spec_for(self, contract: ibi.Contract) -> ContractSpec:
+        """Return a copy of the declaration owning a contract_spec or qualified member."""
+        return deepcopy(self._contract_specs[self.contract_spec_key(contract)])
 
     def contracts_for(self, contract: ibi.Contract) -> tuple[ibi.Contract, ...]:
         """Return all qualified members, including past and later futures expiries.
 
         This is a membership query, not a trading-eligibility decision.
         """
-        key = self.blueprint_key(contract)
+        key = self.contract_spec_key(contract)
         if key not in self._selectors:
-            raise RuntimeError(f"Blueprint is not qualified yet: {key}")
+            raise RuntimeError(f"Contract specification is not qualified yet: {key}")
         return tuple(
             member
             for member in self.details
@@ -95,20 +97,22 @@ class ContractRegistry:
         )
 
     def get_contract(
-        self, blueprint: Blueprint, which: ActiveNext = ActiveNext.ACTIVE
+        self, contract_spec: ContractSpec, which: ActiveNext = ActiveNext.ACTIVE
     ) -> ibi.Contract | None:
-        selector = self.get_selector(blueprint)
+        selector = self.get_selector(contract_spec)
         if selector:
             return general_to_specific_contract_class(
                 getattr(selector, f"{which.name.lower()}_contract")
             )
         else:
-            return self._blueprints.get(self.hash_contract(blueprint))
+            return self._contract_specs.get(self.hash_contract(contract_spec))
 
-    def get_selector(self, blueprint: Blueprint) -> AbstractBaseContractSelector | None:
+    def get_selector(
+        self, contract_spec: ContractSpec
+    ) -> AbstractBaseContractSelector | None:
         """Look up the initialized selector from a declaration or qualified member."""
         try:
-            return self._selectors.get(self.blueprint_key(blueprint))
+            return self._selectors.get(self.contract_spec_key(contract_spec))
         except KeyError:
             return None
 
@@ -128,10 +132,10 @@ class ContractRegistry:
         members: dict[int, ContractKey] = {}
         details = DetailsContainer()
 
-        for blueprint, details_list in zip(
-            self._blueprints, input_details, strict=True
+        for contract_spec, details_list in zip(
+            self._contract_specs, input_details, strict=True
         ):
-            selectors[blueprint] = selector_factory(
+            selectors[contract_spec] = selector_factory(
                 details_list,
                 self.futures_roll_bdays,
                 self.futures_roll_margin_bdays,
@@ -144,18 +148,18 @@ class ContractRegistry:
                     con_id = item.contract.conId
                     if con_id:
                         existing = members.get(con_id)
-                        if existing is not None and existing != blueprint:
+                        if existing is not None and existing != contract_spec:
                             raise ValueError(
                                 f"conId={con_id} belongs to multiple "
-                                f"registered blueprints: {existing!r} and {blueprint!r}"
+                                f"registered contract specifications: {existing!r} and {contract_spec!r}"
                             )
-                        members[con_id] = blueprint
+                        members[con_id] = contract_spec
         self._selectors = selectors
         self._series_by_con_id = members
         self.details = details
 
     def series_key(self, contract: ibi.Future) -> ContractKey:
-        """Return the registered blueprint identity for a qualified Future.
+        """Return the registered contract_spec identity for a qualified Future.
 
         Args:
             contract: Qualified Future from any expiry in the registered chain.
@@ -228,9 +232,9 @@ class ContractRegistry:
         return set(self.details)
 
     @property
-    def blueprints(self) -> list[ibi.Contract]:
+    def contract_specs(self) -> list[ibi.Contract]:
         """Return declaration copies safe to pass to broker qualification."""
-        return deepcopy(list(self._blueprints.values()))
+        return deepcopy(list(self._contract_specs.values()))
 
     @property
     def selectors(self) -> list[AbstractBaseContractSelector]:

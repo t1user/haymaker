@@ -1092,7 +1092,7 @@ async def test_cancelled_discovery_replays_incomplete_contracts(
             return {}
 
     async def fake_contracts(self):
-        """Yield the same source contracts on every discovery pass."""
+        """Yield the same signal contracts on every discovery pass."""
 
         for contract in contracts:
             yield contract
