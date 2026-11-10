@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from ..saver import AbstractBaseSaver
-from .schema import require_schema
 from .persistence import PersistenceWriter
 
 from collections.abc import Mapping, Sequence
@@ -291,7 +290,6 @@ class OrderInfo:
         """Return the complete order document stored by Book."""
 
         return {
-            "schema_version": 1,
             "orderId": self.orderId,
             "clientId": self.trade.order.clientId,
             "permId": self.permId,
@@ -313,7 +311,6 @@ class OrderInfo:
     def decode(cls, data: Mapping[str, Any]) -> OrderInfo:
         """Restore an OrderInfo from the current Book schema."""
 
-        require_schema(data)
         if "signal_key" not in data:
             raise ValueError(
                 "Book order lacks signal attribution; standalone conversion required"

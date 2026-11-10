@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert legacy Haymaker Mongo records into the versioned Book schema.
+"""Convert legacy Haymaker Mongo records into the Book schema.
 
 The command is dry-run by default. It requires distinct explicit source and
 target database names and never modifies the source database.
@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -23,17 +23,13 @@ from pymongo import MongoClient  # type: ignore
 from haymaker.book.positions import SignalExecutionState
 from haymaker.book import (
     Book,
-    ContractPosition,
     FillRecord,
     OrderInfo,
-    ContractTarget,
-    RollState,
 )
-from haymaker.book.targets import ContractExecutionState
 from haymaker.misc import decode_tree, tree
 from haymaker.saver import AbstractBaseSaver
 
-MIGRATION_VERSION = "components-book-v6-naming-schema-1"
+MIGRATION_ID = "dev-to-book"
 COLLECTION_IDENTITIES = {
     "orders": "orderId",
     "state": "state_key",
@@ -43,8 +39,6 @@ COLLECTION_IDENTITIES = {
 KNOWN_ROLES = {
     "OPEN": "OPEN",
     "CLOSE": "CLOSE",
-    "TARGET-ADJUSTMENT": "TARGET_ADJUSTMENT",
-    "TARGET_ADJUSTMENT": "TARGET_ADJUSTMENT",
     "STOP": "STOP_LOSS",
     "STOP-LOSS": "STOP_LOSS",
     "STOP_LOSS": "STOP_LOSS",
@@ -76,12 +70,12 @@ def provenance(
 
     source_id_string = str(source_id)
     return {
-        "migration_version": MIGRATION_VERSION,
+        "migration_id": MIGRATION_ID,
         "source_database": source_database,
         "source_collection": source_collection,
         "source_id": source_id_string,
         "migration_key": (
-            f"{MIGRATION_VERSION}:{source_database}:"
+            f"{MIGRATION_ID}:{source_database}:"
             f"{source_collection}:{source_id_string}"
         ),
     }
@@ -140,104 +134,13 @@ def _legacy_protection_inputs(params: Mapping[str, Any]) -> dict[str, Any]:
     return inputs
 
 
-# Legacy conversion vocabulary is confined to this explicit input adapter.
-# Only framework-owned fields are renamed; params and opaque Portfolio state
-# are copied unchanged. Signal and position identifier values never change.
-def _renamed_fields(
-    document: Mapping[str, Any], names: Mapping[str, str]
-) -> dict[str, Any]:
-    result = dict(document)
-    for old, new in names.items():
-        if old in result:
-            if new in result:
-                raise ValueError(
-                    f"Mixed naming schema contains both {old!r} and {new!r}"
-                )
-            result[new] = result.pop(old)
-    return result
-
-
-def _component_document(document: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize supported component input before current-schema validation."""
-    version = document.get("schema_version")
-    if version is not None and (type(version) is not int or version != 1):
-        raise ValueError(f"Unsupported source schema version {version!r}")
-    result = _renamed_fields(document, {"source_key": "signal_key"})
-    kind = result.get("state_type")
-    kinds = {
-        "position": "signal_execution",
-        "balance": "contract_position",
-        "target": "contract_execution",
-    }
-    if version is not None and (kind in kinds or "source_key" in document):
-        raise ValueError("Mixed naming schema in versioned component document")
-    result["schema_version"] = 1
-    if kind in kinds:
-        result["state_type"] = kinds[kind]
-        result["state_key"] = (
-            kinds[kind] + ":" + str(result["state_key"]).split(":", 1)[1]
-        )
-    if result.get("state_type") in {"signal_execution", "contract_position"}:
-        result = _renamed_fields(
-            result,
-            {
-                "quantity": "filled_quantity",
-                "bracket_inputs": "protection_inputs",
-                "target_bracket_inputs": "target_protection_inputs",
-            },
-        )
-    if kind == "roll":
-        if result.get("stage") != "COMPLETE":
-            raise ValueError("Finish pending roll work before changing the roll schema")
-        result["mode"] = {"BRACKET": "SIGNAL", "DIRECT": "CONTRACT"}.get(
-            result["mode"], result["mode"]
-        )
-        result["participants"] = [
-            _renamed_fields(
-                participant, {"source_key": "signal_key", "quantity": "filled_quantity"}
-            )
-            for participant in result["participants"]
-        ]
-        result["target_transfers"] = [
-            _component_document(target) for target in result.get("target_transfers", ())
-        ]
-        for field in ("occurrence_keys", "completed_occurrences"):
-            converted_keys = []
-            for key in result.get(field, ()):
-                try:
-                    parts = json.loads(key)
-                except (TypeError, ValueError):
-                    converted_keys.append(key)
-                    continue
-                if isinstance(parts, list) and len(parts) == 3 and parts[0] == "source":
-                    parts[0] = "signal"
-                    key = json.dumps(parts)
-                converted_keys.append(key)
-            result[field] = converted_keys
-    return result
-
-
 def convert_order(
     document: Mapping[str, Any], *, source_database: str
 ) -> dict[str, Any]:
-    """Convert legacy or component orders without discarding explicit evidence."""
+    """Convert a dev order while retaining its trade and fill evidence."""
 
-    if "execution_model_name" in document and "role" in document:
-        result = _component_document(document)
-        result.setdefault("signal_key", None)
-        source_id = result.pop("_id", result.get("orderId"))
-        result.pop("target_key", None)
-        # Explicit fills, commission updates, timestamps and IB identifiers are
-        # already authoritative. Do not rebuild them from diagnostic Trade data.
-        OrderInfo.decode(result)
-        result.update(
-            provenance(
-                source_database=source_database,
-                source_collection="orders",
-                source_id=source_id,
-            )
-        )
-        return result
+    if "execution_model_name" in document or "role" in document:
+        raise ValueError("Component order input is unsupported; use a dev source")
 
     trade = decode_tree(document["trade"])
     if not isinstance(trade, ibi.Trade):
@@ -250,7 +153,8 @@ def convert_order(
     signal_key = str(document.get("strategy") or "UNKNOWN")
     action = str(document.get("action") or "UNKNOWN")
     role = order_role(action)
-    contract_execution = role == "TARGET_ADJUSTMENT"
+    if role == "TARGET_ADJUSTMENT":
+        raise ValueError("TARGET_ADJUSTMENT is not a dev execution action")
     fills = [FillRecord.from_fill(trade, fill).encode() for fill in trade.fills]
     source_id = document.get("_id", trade.order.orderId)
     migration = provenance(
@@ -270,7 +174,6 @@ def convert_order(
             "reconcile the source instead of inventing a broker status"
         )
     result = {
-        "schema_version": 1,
         "orderId": trade.order.orderId,
         "clientId": trade.order.clientId,
         "permId": trade.order.permId,
@@ -278,8 +181,8 @@ def convert_order(
         "role": role,
         "submitted_at": _submitted_at(trade),
         "execution_model_name": f"legacy:{signal_key}",
-        "signal_key": None if contract_execution else signal_key,
-        "position_id": None if contract_execution else params.get("position_id"),
+        "signal_key": signal_key,
+        "position_id": params.get("position_id"),
         "params": tree(params),
         "fills": fills,
         "applied_fill_keys": [fill["deduplication_key"] for fill in fills],
@@ -328,7 +231,6 @@ def convert_latest_strategy_snapshot(
         )
         converted.append(
             {
-                "schema_version": 1,
                 "state_key": f"signal_execution:{signal_key}",
                 "state_type": "signal_execution",
                 "signal_key": signal_key,
@@ -393,194 +295,15 @@ def _position_fill_checkpoint(
     return sorted(keys)
 
 
-def _exposure(
-    orders: Sequence[Mapping[str, Any]], cutoff: datetime | None = None
-) -> dict[int, ibi.Contract]:
-    """Locate non-flat concrete exposure using normalized fills, including BAG legs."""
-    quantities: dict[int, float] = defaultdict(float)
-    contracts: dict[int, ibi.Contract] = {}
-    seen: set[str] = set()
-    for document in orders:
-        info = OrderInfo.decode(
-            {k: v for k, v in document.items() if k != "target_key"}
-        )
-        has_legs = any(not isinstance(fill.contract, ibi.Bag) for fill in info.fills)
-        for fill in info.fills:
-            if fill.deduplication_key in seen or (cutoff and fill.time <= cutoff):
-                continue
-            seen.add(fill.deduplication_key)
-            quantity = fill.execution.shares * (
-                1 if fill.execution.side in {"BOT", "BUY"} else -1
-            )
-            legs = [(fill.contract, quantity)]
-            if isinstance(fill.contract, ibi.Bag):
-                if has_legs:
-                    continue
-                old, new = info.params.get("old_contract"), info.params.get(
-                    "new_contract"
-                )
-                if not isinstance(old, ibi.Contract) or not isinstance(
-                    new, ibi.Contract
-                ):
-                    raise ValueError(
-                        "Cannot reconcile BAG evidence without explicit roll endpoints"
-                    )
-                legs = [(old, -quantity), (new, quantity)]
-            for contract, delta in legs:
-                contracts[contract.conId] = contract
-                quantities[contract.conId] += delta
-    return {
-        key: contracts[key]
-        for key, quantity in quantities.items()
-        if abs(quantity) > 1e-12
-    }
-
-
-def convert_component_states(
-    documents: Sequence[Mapping[str, Any]],
-    orders: Sequence[Mapping[str, Any]],
-    *,
-    source_database: str,
-) -> list[dict[str, Any]]:
-    """Convert old keyed/component state only when concrete ownership is unambiguous.
-
-    Pending roll work must finish under its original implementation. Old source
-    state without separate held/target fields is reconciled to position evidence.
-    A keyed contract target spanning other held/working Contracts cannot be split
-    automatically; the operator must resolve that allocation before conversion.
-    """
-    converted: list[dict[str, Any]] = []
-    identities: set[str] = set()
-    orders = [_component_document(order) for order in orders]
-    for document in documents:
-        result = _component_document(document)
-        source_id = result.pop("_id", result.get("state_key"))
-        kind = result.get("state_type")
-        if kind == "contract_position":
-            # Rebuild derived totals from converted position/order/roll evidence
-            # at Book startup; copying them would duplicate active-state totals.
-            ContractPosition.decode(result)
-            continue
-        if kind == "signal_execution":
-            result.setdefault(
-                "applied_fill_keys",
-                _position_fill_checkpoint(str(result["signal_key"]), orders),
-            )
-            if "target_contract" not in result:
-                result["target_contract"] = result.get("contract")
-                result["target_protection_inputs"] = result.get("protection_inputs", {})
-                position_orders = [
-                    order
-                    for order in orders
-                    if order.get("signal_key") == result["signal_key"]
-                    and order.get("position_id") == result.get("position_id")
-                ]
-                held = _exposure(position_orders)
-                pending = {
-                    decode_tree(order["trade"])
-                    .contract.conId: decode_tree(order["trade"])
-                    .contract
-                    for order in position_orders
-                    if order.get("active") and order["role"] == "OPEN"
-                }
-                candidates = held if result.get("filled_quantity") else pending
-                if len(candidates) > 1 or (
-                    result.get("filled_quantity") and not candidates
-                ):
-                    raise ValueError(
-                        f"Cannot establish held Contract for signal {result['signal_key']!r}"
-                    )
-                if candidates:
-                    result["contract"] = tree(next(iter(candidates.values())))
-                    openings = [
-                        order for order in position_orders if order["role"] == "OPEN"
-                    ]
-                    if openings:
-                        opening = min(
-                            openings,
-                            key=lambda order: decode_tree(order["submitted_at"]),
-                        )
-                        params = decode_tree(opening.get("params", {}))
-                        required = decode_tree(result.get("protection_inputs", {}))
-                        if any(name not in params for name in required):
-                            raise ValueError(
-                                "Original position bracket inputs are missing from OPEN evidence"
-                            )
-                        result["protection_inputs"] = tree(
-                            {name: params[name] for name in required}
-                        )
-                elif not result.get("filled_quantity"):
-                    result["contract"] = None
-            SignalExecutionState.decode(result)
-        elif kind == "contract_execution":
-            contract = decode_tree(result["contract"])
-            key = result.pop("target_key", None)
-            related = [
-                order
-                for order in orders
-                if order.get("signal_key") is None
-                and (
-                    order.get("target_key") == key
-                    if key is not None
-                    else decode_tree(order["trade"]).contract.conId == contract.conId
-                )
-            ]
-            cutoff = decode_tree(result.get("fill_evidence_start_at"))
-            members = set(_exposure(related, cutoff))
-            members.update(
-                decode_tree(order["trade"]).contract.conId
-                for order in related
-                if order.get("active")
-            )
-            if members - {contract.conId}:
-                raise ValueError(
-                    f"Ambiguous concrete allocation for target {key!r}: conIds={sorted(members)}"
-                )
-            result["conId"] = contract.conId
-            result["state_key"] = f"contract_execution:{contract.conId}"
-            ContractExecutionState.decode(result)
-        elif kind == "roll":
-            if result.get("stage") != "COMPLETE":
-                raise ValueError(
-                    "Finish pending roll work before changing the roll schema"
-                )
-            result["participants"] = [
-                {
-                    key: value
-                    for key, value in participant.items()
-                    if key != "target_key"
-                }
-                for participant in result["participants"]
-            ]
-            RollState.decode(result)
-        elif kind != "portfolio":
-            raise ValueError(f"Unknown component state_type: {kind!r}")
-        identity = result["state_key"]
-        if identity in identities:
-            raise ValueError(
-                f"Multiple old states map to {identity!r}; allocation must be resolved explicitly"
-            )
-        identities.add(identity)
-        result.update(
-            provenance(
-                source_database=source_database,
-                source_collection="state",
-                source_id=source_id,
-            )
-        )
-        converted.append(result)
-    return converted
-
-
 def convert_blotter(
     document: Mapping[str, Any], *, source_database: str
 ) -> dict[str, Any]:
     """Copy one blotter row while normalizing logical attribution."""
 
-    result = _renamed_fields(document, {"source_key": "signal_key"})
+    result = dict(document)
     source_id = result.pop("_id", result.get("order_id", "unknown"))
-    signal_key = result.pop("strategy", None) or result.get("signal_key")
-    action = result.pop("action", None) or result.get("role", "UNKNOWN")
+    signal_key = result.pop("strategy", None)
+    action = result.pop("action", "UNKNOWN")
     result.update(
         {
             "signal_key": signal_key,
@@ -616,7 +339,7 @@ def _ensure_target_compatible(
         count = collection.count_documents({})
         compatible = collection.count_documents(
             {
-                "migration_version": MIGRATION_VERSION,
+                "migration_id": MIGRATION_ID,
                 "source_database": source_database,
                 "source_fingerprint": source_fingerprint,
             }
@@ -719,8 +442,6 @@ class _ValidationSaver(AbstractBaseSaver):
 def _validate_restoration(
     orders: Sequence[Mapping[str, Any]],
     states: Sequence[Mapping[str, Any]],
-    *,
-    legacy: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Restore real Book accounting using isolated savers and inspect identities."""
     state_saver = _ValidationSaver(states, "state_key")
@@ -749,15 +470,14 @@ def _validate_restoration(
                 accounts.add(record.execution.acctNumber)
     if len(accounts) > 1:
         raise ValueError("Source contains more than one account/subaccount")
-    if legacy:
-        for document in states:
-            expected = SignalExecutionState.decode(document)
-            restored = book.positions._for_signal(expected.signal_key)
-            if restored is None or restored.encode() != expected.encode():
-                raise ValueError(
-                    f"Book restoration changes legacy signal {expected.signal_key!r}"
-                )
-        _validate_legacy_protection(book)
+    for document in states:
+        expected = SignalExecutionState.decode(document)
+        restored = book.positions._for_signal(expected.signal_key)
+        if restored is None or restored.encode() != expected.encode():
+            raise ValueError(
+                f"Book restoration changes legacy signal {expected.signal_key!r}"
+            )
+    _validate_legacy_protection(book)
     # Newly derived records describe the latest source evidence, rather than
     # inventing a conversion-time trading event. This also makes retries stable.
     evidence_times = [
@@ -843,8 +563,6 @@ def _validate_legacy_protection(book: Book) -> None:
 def _validate_settled_orders(
     orders: Sequence[Mapping[str, Any]],
     states: Sequence[Mapping[str, Any]],
-    *,
-    legacy: bool,
 ) -> None:
     """Reject working trading intent and incomplete legacy attribution."""
     sources = {
@@ -862,10 +580,8 @@ def _validate_settled_orders(
             raise ValueError(
                 f"Finish pending {info.role} orderId={info.orderId} under the old runtime before migration"
             )
-        if (
-            legacy
-            and info.signal_key not in sources
-            and (info.fills or info.active or document.get("legacy_accounted_exec_ids"))
+        if info.signal_key not in sources and (
+            info.fills or info.active or document.get("legacy_accounted_exec_ids")
         ):
             raise ValueError(
                 f"Missing legacy snapshot signal for orderId={info.orderId}: {info.signal_key!r}"
@@ -1017,43 +733,25 @@ def migrate(
         source_fingerprint=source_fingerprint,
     )
 
-    versions = {
-        row.get("schema_version")
-        for name in ("orders", "state")
-        for row in original[name]
-    }
-    if len(versions) > 1:
-        raise ValueError("Source mixes incompatible Book schema versions")
+    if original["state"]:
+        raise ValueError("Component state input is unsupported; use a dev source")
     original_orders = original["orders"]
+    snapshot = original["snapshot"]
+    if snapshot is None:
+        raise ValueError(
+            f"No snapshot in {strategy_collection!r}; "
+            "select the real legacy collection with --strategy-collection"
+        )
     orders = [
         convert_order(document, source_database=source_database)
         for document in original_orders
     ]
-    snapshot = original["snapshot"]
-    component_states = original["state"]
-    if snapshot is None and not component_states:
-        raise ValueError(
-            f"No snapshot in {strategy_collection!r} and no component state; "
-            "select the real legacy collection with --strategy-collection"
-        )
-    states = (
-        convert_latest_strategy_snapshot(
-            snapshot,
-            source_database=source_database,
-            orders=orders,
-            source_collection=strategy_collection,
-        )
-        if snapshot is not None
-        else []
+    states = convert_latest_strategy_snapshot(
+        snapshot,
+        source_database=source_database,
+        orders=orders,
+        source_collection=strategy_collection,
     )
-    if component_states:
-        if snapshot is not None:
-            raise ValueError(
-                "Source mixes strategy snapshots and component state; choose one authoritative source"
-            )
-        states = convert_component_states(
-            component_states, original_orders, source_database=source_database
-        )
     blotter = [
         convert_blotter(document, source_database=source_database)
         for document in original["blotter"]
@@ -1064,9 +762,8 @@ def migrate(
         _require_unique(converted[collection], "migration_key")
         for document in converted[collection]:
             document["source_fingerprint"] = source_fingerprint
-    legacy = snapshot is not None
-    _validate_settled_orders(orders, states, legacy=legacy)
-    restoration, restored_states = _validate_restoration(orders, states, legacy=legacy)
+    _validate_settled_orders(orders, states)
+    restoration, restored_states = _validate_restoration(orders, states)
     for row in restored_states:
         if "migration_key" not in row:
             row.update(
@@ -1097,7 +794,7 @@ def migrate(
     report["source_counts"] = {
         "orders": len(original_orders),
         "strategy_snapshots": original["strategy_snapshots"],
-        "state": len(component_states),
+        "state": len(original["state"]),
         "blotter": len(original["blotter"]),
     }
     if apply:

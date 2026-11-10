@@ -28,7 +28,6 @@ from .positions import (
     ProtectionStore,
     ProtectionState,
 )
-from .schema import require_schema
 from .targets import ContractTarget, TargetStore
 from .rolls import RollState, RollStore, FutureRollStage
 from .portfolio import PortfolioStateStore
@@ -115,8 +114,6 @@ class Book:
         state_documents: Sequence[Mapping[str, Any]],
     ) -> None:
         """Dispatch each physical document once, before cross-state verification."""
-        for document in (*order_documents, *state_documents):
-            require_schema(document)
         self.orders._restore(order_documents)
         loaders: dict[str, Callable[[Mapping[str, Any]], None]] = {
             "signal_execution": self.positions._restore_signal,

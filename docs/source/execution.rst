@@ -872,8 +872,6 @@ Use coordinated Book mutations: ``apply_fill``, ``update_position``,
 mutation hooks. A custom Portfolio can save opaque normalized recovery mappings
 with ``book.portfolios.save(key, mapping)`` and ``load(key)``.
 
-All order and state documents require ``schema_version: 1``. Book checks every
-loaded version before recovery; older documents require standalone conversion.
 The physical collections remain ``orders``, ``state`` and ``blotter``. State
 identities and matching ``state_type`` values are ``signal_execution:{signal_key}``,
 ``contract_position:{conId}``, ``contract_execution:{conId}``,
@@ -1094,21 +1092,14 @@ launch after an exception or incomplete verification.
 
 An interrupted conversion can be rerun against the identical source snapshot.
 Source fingerprints prevent changed-source retries from overwriting an earlier
-conversion. Foreign collections, mixed records, other converter versions and
-runtime-written targets are refused. Once the new runtime has used the target,
+conversion. Foreign collections, records from another conversion and runtime-written
+targets are refused. Once the new runtime has used the target,
 do not run conversion into it again. Provenance indexes are sparse so ordinary
 runtime records without migration metadata can coexist with converted records.
 
-The converter accepts legacy strategy snapshots or component ``state`` records,
-not a mixture of both. It preserves complete Trade diagnostics and authoritative
-explicit Fill/CommissionReport evidence. Older signal execution records without
-separate held/pending Contracts are reconciled to position order evidence;
-missing or ambiguous evidence is refused. Legacy keyed records convert only
-when their held and working exposure belongs to the target's concrete Contract.
-Multiple old targets mapping to one conId require an explicit allocation
-decision before conversion. Finish pending rolls under the old implementation
-before changing their schema. Existing non-empty databases produced by another
-converter version are incompatible targets.
+The converter accepts strategy snapshots, orders and blotter records produced
+by ``dev``. It refuses component Book records as source input. It preserves
+Trade diagnostics and fill/commission evidence from the source Trade records.
 
 Legacy conversion preserves the latest authoritative quantity, direction block,
 position identity and original bracket inputs, with ``legacy:<signal_key>`` model

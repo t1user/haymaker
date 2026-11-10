@@ -18,7 +18,6 @@ from ..validators import (
     qualified_contract,
 )
 from ..saver import AbstractBaseSaver
-from .schema import require_schema
 from .persistence import utc_now, PersistenceWriter
 
 from enum import StrEnum
@@ -262,7 +261,6 @@ class RollState:
     def encode(self) -> dict[str, Any]:
         """Serialize the complete roll checkpoint and nested recovery records."""
         return {
-            "schema_version": 1,
             "state_key": f"roll:{self.series_key}",
             "state_type": "roll",
             "series_key": self.series_key,
@@ -289,7 +287,6 @@ class RollState:
     @classmethod
     def decode(cls, data: Mapping[str, Any]) -> RollState:
         """Restore a current roll checkpoint, including its pending transfers."""
-        require_schema(data)
         return cls(
             series_key=str(data["series_key"]),
             mode=ExecutionMode(str(data["mode"])),

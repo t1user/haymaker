@@ -150,7 +150,6 @@ def signal_execution_state(**fields: Any) -> SignalExecutionState:
     """Build a checkpointed signal fixture through the flat storage codec."""
 
     document = {
-        "schema_version": 1,
         "state_key": f"signal_execution:{fields['signal_key']}",
         "state_type": "signal_execution",
         "contract": None,

@@ -25,7 +25,6 @@ from uuid import uuid4
 from ..saver import AbstractBaseSaver
 from .persistence import utc_now, PersistenceWriter
 from .rolls import RollState, FutureRollStage
-from .schema import require_schema
 from .orders import FillRecord, OrderInfo, fill_direction
 
 
@@ -292,7 +291,6 @@ class SignalExecutionState:
     def encode(self) -> dict[str, Any]:
         """Serialize the position and its applied-fill checkpoint together."""
         return {
-            "schema_version": 1,
             "state_key": f"signal_execution:{self.signal_key}",
             "state_type": "signal_execution",
             "signal_key": self.signal_key,
@@ -313,7 +311,6 @@ class SignalExecutionState:
     @classmethod
     def decode(cls, data: Mapping[str, Any]) -> SignalExecutionState:
         """Restore checkpointed state; uncheckpointed schemas need conversion."""
-        require_schema(data)
         if "applied_fill_keys" not in data:
             raise ValueError(
                 "Position state lacks a fill checkpoint; standalone conversion required"
@@ -379,7 +376,6 @@ class ContractPosition:
     def encode(self) -> dict[str, Any]:
         """Serialize one maintained contract position."""
         return {
-            "schema_version": 1,
             "state_key": f"contract_position:{self.contract.conId}",
             "state_type": "contract_position",
             "conId": self.contract.conId,
@@ -391,7 +387,6 @@ class ContractPosition:
     @classmethod
     def decode(cls, document: Mapping[str, Any]) -> ContractPosition:
         """Validate the concrete identity of a persisted contract position."""
-        require_schema(document)
         contract_position = cls(
             contract=decode_tree(document["contract"]),
             filled_quantity=document["filled_quantity"],

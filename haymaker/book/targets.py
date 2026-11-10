@@ -18,7 +18,6 @@ from ..validators import (
 )
 from types import MappingProxyType
 from ..saver import AbstractBaseSaver
-from .schema import require_schema
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -63,7 +62,6 @@ class ContractTarget:
     def encode(self) -> dict[str, Any]:
         """Serialize accepted target fields for the shared recovery document."""
         return {
-            "schema_version": 1,
             "state_key": f"contract_execution:{self.contract.conId}",
             "state_type": "contract_execution",
             "execution_model_name": self.execution_model_name,
@@ -77,7 +75,6 @@ class ContractTarget:
     @classmethod
     def decode(cls, data: Mapping[str, Any]) -> ContractTarget:
         """Restore a concrete target; old keyed schemas require conversion."""
-        require_schema(data)
         if data.get("state_key") != f"contract_execution:{data['conId']}":
             raise ValueError("Old keyed target schema requires standalone conversion")
         target = cls(

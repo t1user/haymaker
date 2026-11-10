@@ -162,7 +162,7 @@ and distinguish pre-existing failures from regressions.
   Broker callbacks must use Book's fill/commission/rebinding methods, not replace
   OrderInfo.trade directly. Book Mongo savers decode UTC dates as aware datetimes;
   injected persistence backends must preserve that contract and raise on failure.
-- Order and state documents use `schema_version: 1`; preflight all versions before recovery. SignalPosition, SignalTarget and ProtectionState share one internal SignalExecutionState and one flat write. ContractExecutionState keeps its ContractTarget and reset cutoff together.
+- SignalPosition, SignalTarget and ProtectionState share one internal SignalExecutionState and one flat write. ContractExecutionState keeps its ContractTarget and reset cutoff together.
 - Physical collections are `orders`, `state`, `blotter`. State identities:
   `signal_execution:{signal_key}`, `contract_position:{conId}`, `contract_execution:{conId}`, `roll:{series_key}`,
   `portfolio:{portfolio_key}`. Do not add snapshot/decision/lock collections

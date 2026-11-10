@@ -37,17 +37,9 @@ PATTERNS = tuple(re.compile(pattern) for pattern in RETIRED)
 # Allow only string literals in these conversion adapters/fixtures and negative
 # compatibility tests. Their implementation, identifiers and comments are checked.
 LEGACY_LITERALS = {
-    "scripts/migrate_components_state.py": {"_component_document", "convert_blotter"},
-    "tests/test_components_migration.py": {
-        "test_component_conversion_rebuilds_derived_balances_in_book",
-        "keyed_target",
-    },
     "tests/test_naming_schema.py": {
-        "legacy_component_document",
         "test_retired_interfaces_are_absent",
         "test_retired_order_schema_never_loses_attribution",
-        "test_completed_historical_roll_executor_allows_new_roll",
-        "test_previous_component_conversion_preserves_reset_and_opaque_payloads",
     },
 }
 
