@@ -882,6 +882,14 @@ envelope. Its direction block and applied-fill checkpoint are persisted with
 all three records in one flat document. Protective flattening updates filled
 exposure, clears the target opening and checkpoints the fill together. A reversal
 keeps held protection inputs separate from the next opening's inputs.
+An unambiguously attributed manual fill that fully closes a signal position also
+clears its target and protection inputs in that checkpoint. Controller cancels
+the remaining protective orders for that position, including after a restart.
+Reconciliation waits for those cancellations to be confirmed before succeeding.
+The signal stays flat until a new target arrives; a manual close does not add a
+direction block. Partial manual fills retain the existing target. When several
+signals hold the same Contract, manual fills are not assigned to an arbitrary
+signal; inspect the attribution before resuming those signals.
 Contract targets share an internal document with their reset cutoff and tombstone.
 Historical evidence remains available after reset; pre-reset fills cannot restore
 cleared exposure, while fills arriving after the clear are still accounted.
@@ -898,6 +906,23 @@ UTC datetimes. Startup repairs complete before the runtime loop starts.
 Rebinding preserves old broker IDs and persistence priority; late commissions
 remain durable even without blotter output. Book performs no broker calls or
 Portfolio allocation.
+
+Each accepted status, fill and commission update saves the latest complete Trade
+snapshot alongside normalized execution evidence. Earlier snapshots are replaced;
+this is not an archive of every callback. A queued update is not yet durable.
+If a crash precedes its database write, recovery still needs that evidence from
+IB. Committed executions whose position update was interrupted are replayed from
+the saved order without counting already checkpointed fills again.
+
+Execution identity uses matching permanent IDs when available, falling back to
+client/order IDs only when a permanent ID is absent. Foreign fills attached by IB
+after an order-number reset and empty execution placeholders are excluded from
+accounting and reporting and logged as errors. Reusing a stored order number for
+a different permanent order is rejected rather than overwriting its evidence,
+and a live identity conflict disables further submissions for investigation.
+A zero-ID Trade can rebind to a known permanent order and its saved nonzero ID;
+an unmatched zero-ID Trade is logged as an error and is never stored under a
+synthetic key.
 
 .. _account-reset:
 
@@ -932,7 +957,19 @@ Status, execution and commission callbacks remain active during startup,
 reconnect and workload shutdown. Book deduplicates execution accounting;
 Controller has no callback ``hold`` mode. Reconciliation also recovers late
 commission reports for known working and terminal orders. Blotter output waits
-for every execution's report before recording the completed trade.
+for terminal status and every actual execution's commission report. With explicit
+BAG legs, their reports supply commissions; the aggregate BAG execution is not an
+additional charge. Real executions awaiting commissions are never treated as
+empty placeholders.
+
+``controller.commission_timeout`` defaults to 30 seconds after terminal status is
+observed. The wait does not block execution accounting or reconciliation. A timeout
+logs incomplete evidence once and leaves the report incomplete; it does not stop
+trading or substitute zero commissions. Late reports can still finish the trade.
+Malformed commission callbacks are logged as errors without replacing valid
+commission evidence. Status changes and reconciliation recheck completion even
+when commissions were already saved. Blotter duplicate suppression uses permanent
+order identity, including rows already present in its configured backend.
 
 Scheduled and custom futures-roll checks defer while disconnected, during
 reconciliation, or before successful reconciliation of the current workload.

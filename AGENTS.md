@@ -162,6 +162,22 @@ and distinguish pre-existing failures from regressions.
   Broker callbacks must use Book's fill/commission/rebinding methods, not replace
   OrderInfo.trade directly. Book Mongo savers decode UTC dates as aware datetimes;
   injected persistence backends must preserve that contract and raise on failure.
+- Validate fill identity before accounting or reporting: conflicting permanent IDs
+  must never fall back to matching local order IDs. Retain accepted order identity
+  independently of mutable IB Trade objects. Log and exclude foreign/empty execution
+  placeholders; never discard a real fill just because its commission is pending.
+  Unknown zero-ID Trades are errors and must not be persisted under synthetic IDs.
+  Known permanent orders can recover their previously stored nonzero order ID.
+- A full, unambiguously attributed MANUAL close checkpoints target zero and cleared
+  protection inputs with the fill. Cancel that position's remaining protective orders
+  live and on recovery; reconciliation requires confirmed cancellation. Stay flat
+  until a new target. Partial fills retain the target,
+  and ambiguous manual fills must not be assigned to an arbitrary signal.
+- Recheck terminal trade reporting on status, fills, commissions and reconciliation.
+  Wait for actual commissions with `controller.commission_timeout` (30 seconds);
+  timeout logs incomplete evidence once without blocking accounting or trading.
+  Late reports remain accepted. Explicit BAG legs supply commissions instead of the
+  aggregate BAG record. Suppress blotter duplicates by permanent order identity.
 - SignalPosition, SignalTarget and ProtectionState share one internal SignalExecutionState and one flat write. ContractExecutionState keeps its ContractTarget and reset cutoff together.
 - Physical collections are `orders`, `state`, `blotter`. State identities:
   `signal_execution:{signal_key}`, `contract_position:{conId}`, `contract_execution:{conId}`, `roll:{series_key}`,

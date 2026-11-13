@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import itertools
+import logging
 import random
 import string
 from collections import UserDict
@@ -12,6 +13,42 @@ from typing import Any, Callable, Literal
 
 import ib_insync as ibi
 import pandas as pd
+
+log = logging.getLogger(__name__)
+
+
+def fill_matches_trade(trade: ibi.Trade, fill: ibi.Fill) -> bool:
+    """Match broker execution identity, preferring permanent IDs over local IDs."""
+    order, execution = trade.order, fill.execution
+    if order.permId and execution.permId:
+        return order.permId == execution.permId
+    return bool(order.orderId) and (order.clientId, order.orderId) == (
+        execution.clientId,
+        execution.orderId,
+    )
+
+
+def valid_trade_fill(trade: ibi.Trade, fill: ibi.Fill) -> bool:
+    """Exclude IB placeholders and foreign fills, retaining diagnostics in logs.
+
+    IB can attach old executions to a new Trade after order numbering resets.
+    Empty executions are distinct from real executions awaiting commissions.
+    """
+    if not fill.execution.execId and not fill.execution.shares:
+        reason = "empty execution"
+    elif not fill_matches_trade(trade, fill):
+        reason = "foreign execution"
+    else:
+        return True
+    log.error(
+        "Ignoring %s: orderId=%s clientId=%s permId=%s execution=%s",
+        reason,
+        trade.order.orderId,
+        trade.order.clientId,
+        trade.order.permId,
+        fill.execution,
+    )
+    return False
 
 
 def action(signal: int) -> str:

@@ -47,6 +47,38 @@ def test_interrupted_signal_projection_recovers_once(
         assert not recovered.apply_fill(opening, execution)
 
 
+def test_manual_close_target_recovers_with_interrupted_position_write(
+    book, order_saver, state_saver, monkeypatch
+):
+    """The same durable fill both flattens exposure and suppresses the old target."""
+    closing = trade(order_id=-1, side="SELL")
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
+            execution_model_name="brackets",
+            contract=closing.contract,
+            filled_quantity=2,
+            target_quantity=2,
+            position_id="position-1",
+            protection_inputs={"atr": 5},
+        )
+    )
+    book.save_order(order_info(closing, role="MANUAL"))
+    save = state_saver.save
+    monkeypatch.setattr(state_saver, "save", Mock(side_effect=RuntimeError("crash")))
+    execution = fill(closing, quantity=2)
+    with pytest.raises(RuntimeError, match="crash"):
+        book.apply_fill(closing, execution)
+    monkeypatch.setattr(state_saver, "save", save)
+    for _ in range(2):
+        recovered = restore(order_saver, state_saver)
+        state = recovered.positions._for_signal("alpha")
+        assert state.filled_quantity == state.target_quantity == 0
+        assert state.position_id is None
+        assert not state.protection_inputs
+        assert not recovered.apply_fill(closing, execution)
+
+
 @pytest.mark.parametrize("reset", [False, True])
 def test_checkpoint_preserves_explicit_correction_and_reset(
     book, order_saver, state_saver, reset

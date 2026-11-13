@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,6 +14,78 @@ from . import misc
 from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver
 
 log = logging.getLogger(__name__)
+
+
+def _execution_totals(trade: ibi.Trade) -> tuple[float, float]:
+    """Calculate report quantity/price from executions, including leg-only BAGs."""
+    if not isinstance(trade.contract, ibi.Bag):
+        return trade.filled(), misc.trade_fill_price(trade)
+    aggregate = [fill for fill in trade.fills if fill.contract.secType == "BAG"]
+    if aggregate:
+        clean = replace(trade, fills=aggregate)
+        return clean.filled(), misc.trade_fill_price(clean)
+    quantities = []
+    price = 0.0
+    for leg in trade.contract.comboLegs:
+        fills = [fill for fill in trade.fills if fill.contract.conId == leg.conId]
+        quantity = sum(fill.execution.shares for fill in fills)
+        if not quantity or leg.ratio <= 0:
+            return 0.0, 0.0
+        quantities.append(quantity / leg.ratio)
+        price += (
+            misc.trade_fill_price(replace(trade, fills=fills))
+            * leg.ratio
+            * (1 if leg.action == "BUY" else -1)
+        )
+    if not quantities or len(set(quantities)) != 1:
+        return 0.0, 0.0
+    return quantities[0], price
+
+
+def commission_reports(
+    trade: ibi.Trade, *, expected_quantity: float | None = None
+) -> list[ibi.CommissionReport] | None:
+    """Return complete execution commissions, or None while evidence is missing.
+
+    Explicit BAG legs carry the commissions when present. The aggregate BAG
+    execution is then quantity/price evidence, not an additional charge.
+    """
+    quantity, _ = _execution_totals(trade)
+    if expected_quantity is None:
+        expected_quantity = (
+            trade.order.totalQuantity
+            if trade.orderStatus.status == ibi.OrderStatus.Filled
+            else trade.orderStatus.filled
+        )
+    if quantity < expected_quantity or quantity > trade.order.totalQuantity:
+        return None
+    fills = trade.fills
+    if isinstance(trade.contract, ibi.Bag):
+        legs = [fill for fill in fills if fill.contract.secType != "BAG"]
+        if legs:
+            for leg in trade.contract.comboLegs:
+                leg_quantity = sum(
+                    fill.execution.shares
+                    for fill in legs
+                    if fill.contract.conId == leg.conId
+                )
+                if not leg_quantity or leg_quantity != quantity * leg.ratio:
+                    return None
+            fills = legs
+    if not fills or any(
+        not fill.execution.execId
+        or fill.commissionReport.execId != fill.execution.execId
+        or not math.isfinite(fill.commissionReport.commission)
+        or not math.isfinite(fill.commissionReport.realizedPNL)
+        for fill in fills
+    ):
+        return None
+    return [fill.commissionReport for fill in fills]
+
+
+def _report_identity(perm_id: Any, order_id: Any) -> tuple[Any, Any]:
+    # Rebinding can change orderId; resetting numbering can reuse it.
+    return (perm_id, None) if perm_id else (None, order_id)
 
 
 class Blotter:
@@ -40,7 +114,8 @@ class Blotter:
         self._current_records: list[dict[str, Any]] = []
         self.unsaved_trades: dict = {}
         self.com_reports: dict = {}
-        self.done_trades: list[int] = []
+        self.done_trades: set[tuple[Any, Any]] = set()
+        self._loaded_done_trades = False
         if saver is None:
             saver = CsvSaver(name="blotter", folder="blotter", use_timestamp=False)
         self.saver = saver
@@ -51,6 +126,16 @@ class Blotter:
     def log_trade(
         self, trade: ibi.Trade, comms: list[ibi.CommissionReport], **kwargs
     ) -> None:
+        if not self._loaded_done_trades:
+            self.done_trades.update(
+                _report_identity(row.get("perm_id"), row.get("order_id"))
+                for row in self.records()
+            )
+            self._loaded_done_trades = True
+        identity = _report_identity(trade.order.permId, trade.order.orderId)
+        if identity in self.done_trades:
+            return
+        quantity, price = _execution_totals(trade)
         row = {
             "local_time": datetime.now(),
             "sys_time": datetime.now(timezone.utc),  # system time
@@ -64,8 +149,8 @@ class Blotter:
             "side": trade.order.action,  # buy or sell
             "order_type": trade.order.orderType,  # order type
             "order_price": trade.order.auxPrice or trade.order.lmtPrice,  # order price
-            "amount": trade.filled(),  # unsigned amount
-            "price": trade.orderStatus.avgFillPrice or misc.trade_fill_price(trade),
+            "amount": quantity,  # unsigned amount
+            "price": price,
             "order_id": trade.order.orderId,  # non unique
             "perm_id": trade.order.permId,  # unique trade id
             "commission": sum([comm.commission for comm in comms]),
@@ -75,11 +160,8 @@ class Blotter:
         row["trade"] = ibi.util.tree(trade)
         if kwargs:
             row.update(kwargs)
-        if trade.order.orderId not in self.done_trades:
-            self.save_report(row)
-            self.done_trades.append(trade.order.orderId)
-        else:
-            log.debug(f"Skipping duplicate blotter entry for {trade.order.orderId}")
+        self.save_report(row)
+        self.done_trades.add(identity)
 
     def log_commission(
         self,
@@ -92,27 +174,13 @@ class Blotter:
         Get trades that have all CommissionReport filled and log them.
         """
 
-        fills = [
-            fill
-            for fill in trade.fills
-            # rarely, there's a bug in ib data, where unrelated
-            # fill appears in the list (probably only in paper acc)
-            # it's a precaution
-            if fill.execution.permId == trade.order.permId
-        ]
-
-        comms = [fill.commissionReport for fill in fills]
-
-        if (
-            trade.isDone()
-            and fills
-            and all(
-                fill.commissionReport.execId == fill.execution.execId
-                and fill.commissionReport.execId
-                for fill in fills
-            )
-        ):
-            self.log_trade(trade, comms, **kwargs)
+        clean = replace(
+            trade,
+            fills=[fill for fill in trade.fills if misc.valid_trade_fill(trade, fill)],
+        )
+        comms = commission_reports(clean)
+        if clean.isDone() and comms is not None:
+            self.log_trade(clean, comms, **kwargs)
 
     def save_report(self, report: dict[str, Any]) -> None:
         """Record one completed trade and apply the configured save policy.
@@ -153,7 +221,7 @@ class Blotter:
             if not isinstance(candidate, Mapping):
                 continue
             row = dict(candidate)
-            identity = (row.get("perm_id"), row.get("order_id"))
+            identity = _report_identity(row.get("perm_id"), row.get("order_id"))
             if identity == (None, None):
                 rows.append(row)
                 continue

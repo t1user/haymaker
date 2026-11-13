@@ -164,6 +164,12 @@ class SyncCoordinator:
         if order_sync.done or order_sync.recovered_fills:
             await asyncio.sleep(0)
         await self.recover_commissions()
+        pending_manual_exits = False
+        for info in self.controller.book.orders.query(role=StandardOrderRole.MANUAL):
+            pending_manual_exits |= self.controller.cancel_manual_close_protection(info)
+        if pending_manual_exits:
+            log.info("Waiting for manual-close protective order cancellations")
+            return False
         if self.request_restart:
             return False
         if order_sync.unresolved:
@@ -299,6 +305,10 @@ class SyncCoordinator:
             )
             if record is not None and record.commission_report != report:
                 await self.controller.onCommissionReport(info.trade, fill, report)
+        # A report may already be durable although the terminal status arrived
+        # later, or the process stopped before optional reporting was queued.
+        for info in self.controller.book.orders.query():
+            self.controller.check_commission_completion(info)
 
     def handle_recovered_fills(
         self, executions: list[tuple[ibi.Trade, ibi.Fill]]

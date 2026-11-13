@@ -576,7 +576,8 @@ def test_late_commission_updates_normalized_fill_evidence(book):
     )
 
     assert book.update_commission(trade_, execution, report)
-    assert info.fills[0].commission_report is report
+    assert info.fills[0].commission_report == report
+    assert info.fills[0].commission_report is not report
     assert (
         info.encode()["fills"][0]["commission_report"]["CommissionReport"]["commission"]
         == 1.25

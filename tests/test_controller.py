@@ -834,6 +834,8 @@ async def test_commission_report_uses_book_owned_blotter(controller_runtime):
     )
     report = ibi.CommissionReport(execId="exec-1", commission=1)
     execution = fill(trade)
+    await controller.onExecDetailsEvent(trade, execution)
+    trade.orderStatus.status = ibi.OrderStatus.Filled
 
     await controller.onCommissionReport(trade, execution, report)
 

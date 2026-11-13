@@ -16,6 +16,8 @@ from typing import Any, Literal
 
 import ib_insync as ibi
 
+from ..misc import valid_trade_fill
+from ..validators import finite_number
 from ..enums import ExecutionMode
 from ..blotter import Blotter
 from ..saver import AbstractBaseSaver, MongoSaver
@@ -394,6 +396,8 @@ class Book:
             ``False`` for a replayed execution.
         """
 
+        if not valid_trade_fill(trade, fill):
+            return False
         info = self._bind_trade(trade)
         if info is None:
             raise KeyError(
@@ -452,6 +456,12 @@ class Book:
 
         if not isinstance(report, ibi.CommissionReport):
             raise TypeError("report must be an ib_insync.CommissionReport")
+        if not valid_trade_fill(trade, fill):
+            return False
+        if not report.execId or report.execId != fill.execution.execId:
+            raise ValueError("Commission report does not identify its execution")
+        finite_number(report.commission, "commission")
+        finite_number(report.realizedPNL, "realizedPNL")
         info = self._bind_trade(trade)
         if info is None:
             return False
@@ -461,7 +471,7 @@ class Book:
             if record.deduplication_key == key:
                 records[index] = replace(
                     record,
-                    commission_report=report,
+                    commission_report=replace(report),
                 )
                 info.fills = tuple(records)
                 # Historical reports need to update Trade diagnostics too;

@@ -23,9 +23,11 @@ from haymaker.components import (
     FixedSizeAllocator,
     FixedStop,
     PortfolioWrapper,
+    PositionTarget,
     SignalType,
     StandardOrderRole,
     TakeProfitAsStopMultiple,
+    TargetIntent,
 )
 from haymaker.controller import Controller
 from haymaker.controller.controller import SyncOutcome
@@ -151,6 +153,53 @@ async def test_live_duplicate_completion_uses_accounted_price(entry_path):
     assert len(broker.submitted) == 3
     assert broker.submitted[1].order.auxPrice == 91
     assert not runtime.controller._trading_disabled
+
+
+@pytest.mark.parametrize("cancel_before_restart", [False, True])
+@pytest.mark.parametrize("confirm_cancellation", [False, True])
+async def test_manual_close_stays_flat_until_new_target_after_restart(
+    entry_path, restart_entry, cancel_before_restart, confirm_cancellation, monkeypatch
+):
+    """Recovery cancels stale exits even if the process died before cancellation."""
+    runtime, broker, model, _ = entry_path
+    await broker.fill(broker.submitted[0])
+    held = broker.submitted[0].contract
+    manual = ibi.Trade(
+        contract=held,
+        order=ibi.MarketOrder("SELL", 3, orderId=-1, permId=9999),
+        orderStatus=ibi.OrderStatus(status=ibi.OrderStatus.Submitted, remaining=3),
+    )
+    broker.submitted.append(manual)
+    if cancel_before_restart:
+        await broker.fill(manual)
+    else:
+        execution = await broker.fill(manual, notify_events=False)
+        runtime.controller.assign_manual_trade(manual)
+        runtime.book.apply_fill(manual, execution)
+    fresh, replacement, controller, recovered_model = restart_entry(runtime, broker)
+    if not confirm_cancellation and not cancel_before_restart:
+        monkeypatch.setattr(replacement, "cancelOrder", Mock(return_value=None))
+        assert await controller.run() is SyncOutcome.FAILED
+        assert controller._trading_disabled
+        assert fresh.book.targets.for_signal("alpha").target_quantity == 0
+        return
+    assert await controller.run() is SyncOutcome.OK
+    recovered_model.recover()
+    assert replacement.openTrades() == []
+    assert replacement.positions() == []
+    assert len(replacement.submitted) == 4
+    assert fresh.book.targets.for_signal("alpha").target_quantity == 0
+    assert recovered_model.accept(
+        PositionTarget(
+            contract=held,
+            signal_key="alpha",
+            target_quantity=3,
+            intent=TargetIntent.OPEN,
+            metadata={"atr": 5},
+        )
+    )
+    assert len(replacement.submitted) == 5
+    assert replacement.submitted[-1].order.action == "BUY"
 
 
 @pytest.mark.parametrize("terminal", [False, True])

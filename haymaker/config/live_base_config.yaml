@@ -36,6 +36,7 @@ controller: # Trading reconciliation, startup actions, and scheduling.
   execution_verification_delay: 15 # Seconds before checking a submitted trade.
   execution_verification_max_retries: 5 # Maximum transaction verification attempts.
   broker_request_timeout: 10 # Seconds allowed for controller broker requests.
+  commission_timeout: 30 # Seconds after completion before logging missing commissions; late reports remain accepted.
   sync_max_attempts: 3 # Maximum reconciliation passes per sync cycle.
   sync_resync_delay: 1 # Seconds between reconciliation passes.
   position_mismatch_policy: fail # Unexplained Book/broker mismatch: fail, or opt into correct.

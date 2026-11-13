@@ -18,6 +18,9 @@ import ib_insync as ibi
 from haymaker import misc
 from haymaker.base import Atom
 from haymaker.book import OrderInfo
+from haymaker.book.orders import OrderIdentityError
+from haymaker.blotter import commission_reports
+from haymaker.validators import finite_number
 from haymaker.enums import ExecutionMode
 from haymaker.components.messages import PositionTarget, StandardOrderRole
 from haymaker.supervisor.codes import SUPERVISOR_OWNED_BROKER_CODES
@@ -77,6 +80,7 @@ class Controller(Atom):
     execution_verification_delay: int = 0
     execution_verification_max_retries: int = 5
     broker_request_timeout: int = 10
+    commission_timeout: float = 30
     sync_max_attempts: int = 3
     sync_resync_delay: float = 1
     position_mismatch_policy: Literal["correct", "fail"] = "fail"
@@ -114,6 +118,9 @@ class Controller(Atom):
         default_factory=dict, init=False, repr=False
     )
     _execution_mode: ExecutionMode | None = field(default=None, init=False, repr=False)
+    _commission_waits: dict[int, asyncio.TimerHandle | None] = field(
+        default_factory=dict, init=False, repr=False
+    )
     future_roller: FutureRoller = field(init=False, repr=False)
 
     @classmethod
@@ -145,6 +152,8 @@ class Controller(Atom):
         self.future_roller = FutureRoller(self)
         self.ib.disconnectedEvent.connect(self.suspend_broker_work)
         self.ignore_errors = _broker_messages_to_ignore(self.ignore_errors)
+        if finite_number(self.commission_timeout, "commission_timeout") <= 0:
+            raise ControllerError("controller.commission_timeout must be positive")
         if self.position_mismatch_policy not in ("correct", "fail"):
             raise ControllerError(
                 "controller.position_mismatch_policy must be correct or fail"
@@ -178,6 +187,11 @@ class Controller(Atom):
             f"position_mismatch_policy={self.position_mismatch_policy}, "
             f"missing_brackets={self.missing_brackets}>"
         )
+
+    def _log_event_error(self, event: ibi.Event, exception: Exception) -> None:
+        if isinstance(exception, OrderIdentityError):
+            self.disable_trading(str(exception))
+        super()._log_event_error(event, exception)
 
     @property
     def execution_mode(self) -> ExecutionMode | None:
@@ -597,7 +611,11 @@ class Controller(Atom):
             position_id=position_id,
             params={} if params is None else params,
         )
-        self.book.save_order(info)
+        try:
+            self.book.save_order(info)
+        except OrderIdentityError as exc:
+            self.disable_trading(str(exc))
+            raise
         log.debug(
             "%s orderId=%s permId=%s registered for %s",
             trade.order.orderType,
@@ -635,6 +653,9 @@ class Controller(Atom):
         """Report a broker order that lacks immediate Book registration."""
 
         await asyncio.sleep(0)
+        if not trade.order.orderId:
+            self.onOrderStatusEvent(trade)
+            return
         if trade.order.orderId < 0:
             return
         if self.book.orders.by_id(trade.order.orderId) is None:
@@ -648,15 +669,21 @@ class Controller(Atom):
         """Persist status changes and rebind current live Trade objects."""
         if self.book.rebind_trade(trade) is not None:
             if not trade.order.orderId:
-                log.warning(
-                    "Skipping unknown order status with orderId 0, permId=%s",
+                log.error(
+                    "Cannot persist unknown orderId=0 trade: clientId=%s permId=%s status=%s",
+                    trade.order.clientId,
                     trade.order.permId,
+                    trade.orderStatus.status,
                 )
                 return
             log.debug(
                 "Unattributed order status awaits reconciliation: %s",
                 trade.order.orderId,
             )
+            return
+        info = self.book.orders.by_id(trade.order.orderId)
+        if info is not None:
+            self.check_commission_completion(info)
 
     def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """Apply one execution idempotently to Book projections."""
@@ -667,6 +694,8 @@ class Controller(Atom):
             return
         try:
             changed = self.book.apply_fill(trade, fill)
+        except OrderIdentityError:
+            raise  # The event error handler disables new broker work.
         except (KeyError, ValueError):
             log.exception("Cannot apply fill for orderId=%s", trade.order.orderId)
             return
@@ -680,6 +709,8 @@ class Controller(Atom):
     async def onExecDetailsEvent(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """Match, persist, and account one broker execution callback."""
 
+        if not misc.valid_trade_fill(trade, fill):
+            return
         info = (
             self.assign_manual_trade(trade)
             or self.book.orders.by_id(trade.order.orderId)
@@ -688,6 +719,8 @@ class Controller(Atom):
         )
         if info is not None:
             self.register_position(trade, fill)
+            self.cancel_manual_close_protection(info)
+            self.check_commission_completion(info)
 
     async def onCommissionReport(
         self,
@@ -697,22 +730,75 @@ class Controller(Atom):
     ) -> None:
         """Persist final commission evidence and optionally write a blotter row."""
 
-        if not trade.order.orderId and not trade.order.permId:
-            return
         await asyncio.sleep(0)
         info = self.book.orders.by_id(
             trade.order.orderId
         ) or self.book.orders.by_perm_id(trade.order.permId)
         if info is None:
-            log.error("Commission report for unknown orderId=%s", trade.order.orderId)
+            log.error(
+                "Commission report for unknown orderId=%s clientId=%s permId=%s execId=%s",
+                trade.order.orderId,
+                trade.order.clientId,
+                trade.order.permId,
+                report.execId,
+            )
+            return
+        if not misc.valid_trade_fill(trade, fill):
+            return
+        try:
+            finite_number(report.commission, "commission")
+            finite_number(report.realizedPNL, "realizedPNL")
+            if not report.execId or report.execId != fill.execution.execId:
+                raise ValueError("Commission report does not identify its execution")
+        except (TypeError, ValueError):
+            log.error(
+                "Invalid commission report: orderId=%s permId=%s execId=%s report=%s",
+                trade.order.orderId,
+                trade.order.permId,
+                fill.execution.execId,
+                report,
+            )
             return
         if not self.book.update_commission(trade, fill, report):
-            log.warning(
+            log.error(
                 "Commission report has no normalized fill evidence: "
                 "execId=%s orderId=%s",
                 fill.execution.execId,
                 trade.order.orderId,
             )
+        self.check_commission_completion(info)
+
+    def check_commission_completion(self, info: OrderInfo) -> None:
+        """Recheck terminal reporting after status, execution, or commission updates.
+
+        Wait without blocking accounting. A timeout reports missing evidence once;
+        later callbacks and reconciliation can still complete the report.
+        """
+        if not info.trade.isDone():
+            return
+        if (
+            not info.fills
+            and not info.trade.orderStatus.filled
+            and (info.trade.orderStatus.status != ibi.OrderStatus.Filled)
+        ):
+            return
+        trade = info.execution_trade()
+        expected = (
+            info.trade.order.totalQuantity
+            if info.trade.orderStatus.status == ibi.OrderStatus.Filled
+            else info.trade.orderStatus.filled
+        )
+        complete = commission_reports(trade, expected_quantity=expected) is not None
+        key = id(info)
+        if not complete:
+            if key not in self._commission_waits:
+                self._commission_waits[key] = asyncio.get_running_loop().call_later(
+                    self.commission_timeout, self._commission_timeout, info
+                )
+            return
+        timer = self._commission_waits.pop(key, None)
+        if timer is not None:
+            timer.cancel()
         blotter = self.book.blotter
         if blotter is None:
             return
@@ -724,9 +810,30 @@ class Controller(Atom):
             "params": ibi.util.tree(dict(info.params)),
         }
         try:
-            blotter.log_commission(trade, fill, report, **kwargs)
+            last = trade.fills[-1]
+            blotter.log_commission(trade, last, last.commissionReport, **kwargs)
         except Exception:
             log.exception("Blotter write failed for orderId=%s", info.orderId)
+
+    def _commission_timeout(self, info: OrderInfo) -> None:
+        self._commission_waits[id(info)] = None
+        records = info.fills
+        if isinstance(info.trade.contract, ibi.Bag):
+            legs = [record for record in records if record.contract.secType != "BAG"]
+            records = legs or records
+        missing = [
+            record.execution.execId
+            for record in records
+            if record.commission_report is None
+            or record.commission_report.execId != record.execution.execId
+        ]
+        log.error(
+            "Incomplete trade after commission timeout: orderId=%s permId=%s "
+            "missing_reports=%s; execution evidence may also be incomplete",
+            info.orderId,
+            info.permId,
+            missing,
+        )
 
     async def verify_target_integrity(
         self, target: PositionTarget, execution_model_name: str
@@ -896,6 +1003,33 @@ class Controller(Atom):
 
         for info in self.book.orders.active(signal_key=signal_key):
             self.cancel(info.trade)
+
+    def cancel_manual_close_protection(self, info: OrderInfo) -> bool:
+        """Cancel a manually closed position's exits; return whether any still work."""
+        if (
+            info.role != StandardOrderRole.MANUAL
+            or not info.signal_key
+            or not info.fills
+        ):
+            return False
+        state = self.book.positions.for_signal(info.signal_key)
+        target = self.book.targets.for_signal(info.signal_key)
+        if (
+            state is None
+            or state.filled_quantity
+            or target is None
+            or target.target_quantity
+        ):
+            return False
+        pending = False
+        for protective in self.book.orders.active(signal_key=info.signal_key):
+            if protective.position_id == info.position_id and protective.role in {
+                StandardOrderRole.STOP_LOSS,
+                StandardOrderRole.TAKE_PROFIT,
+            }:
+                self.cancel(protective.trade)
+                pending |= protective.active
+        return pending
 
     def close_position_for_signal(
         self, signal_key: str, role: str = StandardOrderRole.LIQUIDATION

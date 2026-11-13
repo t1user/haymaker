@@ -224,13 +224,16 @@ class SignalExecutionState:
         quantity = old_quantity + record.execution.shares * fill_direction(record)
         blocked = self.blocked_direction
         protective_exit = quantity == 0 and info.role in {"STOP_LOSS", "TAKE_PROFIT"}
+        manual_exit = quantity == 0 and bool(old_quantity) and info.role == "MANUAL"
         if protective_exit and old_quantity:
             blocked = 1 if old_quantity > 0 else -1
         elif info.role == "OPEN" and quantity != 0:
             blocked = None
-        closed = quantity == 0 and info.role in {"CLOSE", "STOP_LOSS", "TAKE_PROFIT"}
+        closed = manual_exit or (
+            quantity == 0 and info.role in {"CLOSE", "STOP_LOSS", "TAKE_PROFIT"}
+        )
         target = self.target
-        if protective_exit:
+        if protective_exit or manual_exit:
             target = SignalTarget(
                 signal_key=self.signal_key,
                 execution_model_name=self.execution_model_name,

@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 import ib_insync as ibi
 
-from ..misc import action_to_signal, decode_tree, tree
+from ..misc import action_to_signal, decode_tree, tree, valid_trade_fill
 from ..validators import (
     aware_datetime,
     finite_number,
@@ -22,6 +22,10 @@ from ..validators import (
     readonly_mapping,
     qualified_contract,
 )
+
+
+class OrderIdentityError(ValueError):
+    """Broker order identity conflicts with evidence already accepted by Book."""
 
 
 def fill_direction(record: FillRecord) -> Literal[-1, 1]:
@@ -78,11 +82,11 @@ class FillRecord:
         """Create a normalized record from one IB fill callback."""
 
         return cls(
-            execution=fill.execution,
+            execution=replace(fill.execution),
             time=aware_datetime(fill.time, "fill.time"),
             contract=fill.contract,
             commission_report=(
-                fill.commissionReport
+                replace(fill.commissionReport)
                 if fill.commissionReport.execId
                 or fill.commissionReport.commission
                 or fill.commissionReport.realizedPNL
@@ -95,8 +99,12 @@ class FillRecord:
         """Return IB-shaped execution evidence, without requiring a commission."""
         return ibi.Fill(
             self.contract,
-            self.execution,
-            self.commission_report or ibi.CommissionReport(),
+            replace(self.execution),
+            (
+                replace(self.commission_report)
+                if self.commission_report is not None
+                else ibi.CommissionReport()
+            ),
             self.time,
         )
 
@@ -242,6 +250,8 @@ class OrderInfo:
         """
         records = {record.deduplication_key: record for record in self.fills}
         for fill in extra_fills:
+            if not valid_trade_fill(self.trade, fill):
+                continue
             record = FillRecord.from_fill(self.trade, fill)
             previous = records.get(record.deduplication_key)
             if previous is not None and (
@@ -342,6 +352,9 @@ class OrderStore:
         self._saver = saver
         self._writer = writer
         self._items: dict[int, OrderInfo] = {}
+        # Snapshot identity separately: ib_insync can mutate the same Trade
+        # in place when a broker order number is reused.
+        self._identities: dict[int, tuple[int, int]] = {}
         self._received_keys: defaultdict[str, set[str]] = defaultdict(set)
         self._rejections: defaultdict[str, int] = defaultdict(int)
 
@@ -349,10 +362,31 @@ class OrderStore:
         """Persist order evidence before the coordinator updates projections."""
         if not info.orderId:
             raise ValueError("Cannot persist an order with orderId 0")
+        self._check_identity(info.trade)
+        if info.orderId in self._identities and info.orderId not in self._items:
+            raise OrderIdentityError("Cannot reuse a superseded broker orderId")
+        previous = self._items.get(info.orderId)
+        if previous is not None and previous is not info:
+            raise ValueError(
+                "Cannot replace an existing order record; rebind its Trade"
+            )
         info._persistence_priority = info.priority
         self._writer.save(self._saver, info.encode())
         self._items[info.orderId] = info
+        self._identities[info.orderId] = (info.permId, info.trade.order.clientId)
         self._index_fills(info)
+
+    def _check_identity(self, trade: ibi.Trade) -> None:
+        previous = self._identities.get(trade.order.orderId)
+        if previous is None:
+            return
+        perm_id, client_id = previous
+        if (perm_id and trade.order.permId and perm_id != trade.order.permId) or (
+            not (perm_id and trade.order.permId) and client_id != trade.order.clientId
+        ):
+            raise OrderIdentityError(
+                "Broker orderId and permId identify different orders"
+            )
 
     def _index_fills(self, info: OrderInfo) -> None:
         """Maintain signal checkpoints without scanning historical orders on update."""
@@ -368,6 +402,7 @@ class OrderStore:
     def _restore(self, order_documents: Sequence[Mapping[str, Any]]) -> None:
         """Restore canonical records, excluding documents superseded by rebinding."""
         self._items = {}
+        self._identities = {}
         for document in order_documents:
             document = dict(document)
             document.pop("_id", None)
@@ -375,6 +410,7 @@ class OrderStore:
             if not info.orderId:
                 raise ValueError("Persisted order must have a non-zero orderId")
             self._items[info.orderId] = info
+            self._identities[info.orderId] = (info.permId, info.trade.order.clientId)
         superseded = {
             order_id
             for info in self._items.values()
@@ -401,11 +437,10 @@ class OrderStore:
 
     def _rebind(self, trade: ibi.Trade) -> tuple[OrderInfo | None, int]:
         """Bind a known live Trade and return its record and previous broker ID."""
+        self._check_identity(trade)
         info = self.by_id(trade.order.orderId)
         if info is None:
             info = self.by_perm_id(trade.order.permId)
-        elif info.permId and trade.order.permId and info.permId != trade.order.permId:
-            raise ValueError("Broker orderId and permId identify different orders")
         if info is None:
             return None, 0
         old_order_id = info.orderId
@@ -417,7 +452,7 @@ class OrderStore:
         if not trade.order.orderId:
             trade.order.orderId = old_order_id
         if trade.order.orderId in info.previous_order_ids:
-            raise ValueError(
+            raise OrderIdentityError(
                 "Cannot reuse a superseded broker orderId during rebinding"
             )
         if old_order_id != trade.order.orderId:
@@ -448,7 +483,11 @@ class OrderStore:
         if not perm_id:
             return None
         return next(
-            (info for info in self._items.values() if info.permId == perm_id),
+            (
+                info
+                for key, info in self._items.items()
+                if self._identities[key][0] == perm_id
+            ),
             None,
         )
 
