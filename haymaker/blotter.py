@@ -16,7 +16,7 @@ from .saver import AbstractBaseSaver, AsyncSaveManager, CsvSaver, MongoSaver
 log = logging.getLogger(__name__)
 
 
-def _execution_totals(trade: ibi.Trade) -> tuple[float, float]:
+def execution_totals(trade: ibi.Trade) -> tuple[float, float]:
     """Calculate report quantity/price from executions, including leg-only BAGs."""
     if not isinstance(trade.contract, ibi.Bag):
         return trade.filled(), misc.trade_fill_price(trade)
@@ -50,7 +50,7 @@ def commission_reports(
     Explicit BAG legs carry the commissions when present. The aggregate BAG
     execution is then quantity/price evidence, not an additional charge.
     """
-    quantity, _ = _execution_totals(trade)
+    quantity, _ = execution_totals(trade)
     if expected_quantity is None:
         expected_quantity = (
             trade.order.totalQuantity
@@ -135,7 +135,7 @@ class Blotter:
         identity = _report_identity(trade.order.permId, trade.order.orderId)
         if identity in self.done_trades:
             return
-        quantity, price = _execution_totals(trade)
+        quantity, price = execution_totals(trade)
         row = {
             "local_time": datetime.now(),
             "sys_time": datetime.now(timezone.utc),  # system time

@@ -223,6 +223,48 @@ async def test_real_ib_wrapper_fallback_cannot_account_foreign_execution(
     assert runtime.book.orders.by_id(1).execution_trade(current.fills).filled() == 0
 
 
+def test_local_modify_log_persists_before_ib_acknowledgement(controller_runtime):
+    runtime, _, _ = controller_runtime
+    current = trade()
+    runtime.book.save_order(order_info(current))
+    wrapper = runtime.ib.wrapper
+    wrapper.trades[(0, 1)] = current
+    time = datetime.now(timezone.utc)
+    wrapper.lastTime = time
+    current.orderStatus.permId = current.order.permId
+    current.log.append(ibi.TradeLogEntry(time, "Submitted", "Modify"))
+    runtime.ib.orderModifyEvent.emit(current)
+    info = runtime.book.orders.by_id(1)
+    assert [entry.message for entry in info.trade_log] == ["Modify"]
+    wrapper.orderStatus(1, "Submitted", 0, 2, 0, current.order.permId, 0, 0, 0, "", 0)
+    assert [entry.message for entry in current.log] == ["Modify", "Modified"]
+    assert [entry.message for entry in info.trade_log] == ["Modify", "Modified"]
+
+
+def test_terminal_fallback_recovers_offsetting_executions_even_when_net_matches(
+    book, order_saver, monkeypatch
+):
+    broker = ibi.IB()
+    opening = trade()
+    opening.orderStatus.status = "Cancelled"
+    opening.orderStatus.filled = 1
+    closing = trade(order_id=2, perm_id=102, side="SELL", quantity=1)
+    closing.orderStatus.status = "Filled"
+    for current in (opening, closing):
+        current.fills.append(fill(current, exec_id=str(current.order.orderId)))
+        book.save_order(order_info(current, signal_key=None))
+
+    assert book.positions.by_contract() == {}
+    saves = Mock(wraps=order_saver.save)
+    monkeypatch.setattr(order_saver, "save", saves)
+    assert OrderSync(broker, book).run().recovered_terminal_fills
+    assert all(info.fills for info in book.orders.query())
+    assert book.positions.by_contract() == {}
+    assert saves.call_count == 2
+    assert not OrderSync(broker, book).run().recovered_terminal_fills
+    assert saves.call_count == 2
+
+
 @pytest.mark.parametrize("in_place", [False, True])
 def test_reset_numbering_cannot_overwrite_persisted_identity(
     book, order_saver, state_saver, in_place

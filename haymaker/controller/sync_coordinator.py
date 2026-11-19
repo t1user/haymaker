@@ -154,7 +154,7 @@ class SyncCoordinator:
                 order_sync.resolve_completed_trades(completed)
         except (TypeError, ValueError) as exc:
             raise SyncBrokenStateError(
-                "Order execution evidence is inconsistent"
+                f"Order execution evidence is inconsistent: {exc}"
             ) from exc
 
         if order_sync.done:
@@ -177,6 +177,13 @@ class SyncCoordinator:
                 "Order terminal status unresolved after execution recovery: "
                 f"{[trade.order.orderId for trade in order_sync.unresolved]}"
             )
+        if order_sync.terminal_gaps:
+            for gap in order_sync.terminal_gaps:
+                log.warning(gap)
+            # Give pending execution callbacks the regular sync retry window.
+            return False
+        if order_sync.recovered_terminal_fills:
+            return False  # Compare positions against a fresh broker snapshot.
 
         position_sync = PositionSync(
             position_snapshot.positions,

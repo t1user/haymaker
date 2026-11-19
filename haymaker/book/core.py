@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
+from math import isfinite
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -180,8 +181,13 @@ class Book:
     def _bind_trade(self, trade: ibi.Trade) -> OrderInfo | None:
         """Resolve a broker callback and move, rather than duplicate, its contribution."""
         self.check_writable()
-        info, previous_id = self.orders._rebind(trade)
-        if info is not None and previous_id != info.orderId:
+        info = self.orders._match_trade(trade)
+        if info is None:
+            return None
+        if info.trade is not trade and info.trade.isDone() and info.trade.fills:
+            self.recover_terminal_executions(info)
+        previous_id = self.orders._rebind(info, trade)
+        if previous_id != info.orderId:
             self.positions._rekey_order(previous_id, info.orderId)
         return info
 
@@ -423,6 +429,98 @@ class Book:
             self._save_position(state)
             return True
         return new
+
+    def recover_terminal_executions(
+        self, info: OrderInfo, broker_fills: Sequence[ibi.Fill] = ()
+    ) -> bool:
+        """Recover terminal evidence in one order write ahead of its projections.
+
+        Args:
+            info: The known terminal order, still bound to its current snapshot.
+            broker_fills: Additional evidence already available in the IB cache.
+
+        Returns:
+            Whether normalized order evidence changed.
+        """
+        candidates = (*info.trade.fills, *broker_fills)
+        if not candidates:
+            return False
+        records = {record.deduplication_key: record for record in info.fills}
+        new_keys = []
+        for fill in candidates:
+            if not valid_trade_fill(info.trade, fill):
+                continue
+            key = _execution_key(info.trade, fill)
+            record = records.get(key)
+            if record is None:
+                record = replace(
+                    FillRecord.from_fill(info.trade, fill), commission_report=None
+                )
+                records[key] = record
+                new_keys.append(key)
+            elif not record._same_execution(fill):
+                raise ValueError(
+                    f"Conflicting execution {key!r} for order {info.orderId}"
+                )
+            report = fill.commissionReport
+            if (
+                record.commission_report is None
+                and report.execId
+                and report.execId == fill.execution.execId
+                and isfinite(report.commission)
+                and isfinite(report.realizedPNL)
+            ):
+                records[key] = replace(record, commission_report=replace(report))
+
+        if tuple(records.values()) == info.fills:
+            return False
+        additions = [records[key] for key in new_keys]
+        if additions:
+            info.execution_trade([record.to_fill() for record in additions])
+            self._verify_terminal_replay(info, additions)
+        for record in additions:
+            info.add_fill(record)
+        info.fills = tuple(records.values())
+        self.save_order(info)
+        for record in sorted(additions, key=lambda record: record.time):
+            updated = self.positions._after_fill(info, record)
+            if updated is not None:
+                self._save_position(updated)
+        return True
+
+    def _verify_terminal_replay(
+        self, info: OrderInfo, additions: Sequence[FillRecord]
+    ) -> None:
+        """Reject historical fills when the position may already reflect them."""
+        state = (
+            self.positions._for_signal(info.signal_key)
+            if info.signal_key is not None
+            else None
+        )
+        cutoffs = self.targets.cutoffs
+        for evidence in additions:
+            executed_at = evidence.execution.time or evidence.time
+            cutoff = cutoffs.get(evidence.contract.conId)
+            if (cutoff is not None and executed_at <= cutoff) or (
+                state is not None
+                and (
+                    (
+                        state.fill_recovery_cutoff is not None
+                        and executed_at <= state.fill_recovery_cutoff
+                    )
+                    or (
+                        info.position_id != state.position_id
+                        and state.position.updated_at is not None
+                        and executed_at <= state.position.updated_at
+                    )
+                )
+            ):
+                raise ValueError(
+                    f"Execution {evidence.deduplication_key} for order {info.orderId} "
+                    "predates a reset, correction or position change"
+                )
+            if not isinstance(info.trade.contract, ibi.Bag):
+                fill_direction(evidence)
 
     def _recover_position_fills(self) -> None:
         """Finish missing signal projections without replaying checkpointed fills."""

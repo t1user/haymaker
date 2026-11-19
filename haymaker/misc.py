@@ -203,6 +203,11 @@ def decode_tree(obj: Any) -> Any:
     def process_dict(d: dict) -> Any:
         output = {}
         for k, v in d.items():
+            if k == "TradeLogEntry":
+                timestamp = v["time"]
+                if isinstance(timestamp, str):
+                    timestamp = dt.datetime.fromisoformat(timestamp)
+                return ibi.TradeLogEntry(**{**v, "time": timestamp})
             value_ = process_value(v) if k != "lastTradeDateOrContractMonth" else v
             key_ = process_key(k, value_)
             if isinstance(key_, str):

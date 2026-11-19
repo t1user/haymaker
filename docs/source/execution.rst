@@ -907,12 +907,26 @@ Rebinding preserves old broker IDs and persistence priority; late commissions
 remain durable even without blotter output. Book performs no broker calls or
 Portfolio allocation.
 
-Each accepted status, fill and commission update saves the latest complete Trade
-snapshot alongside normalized execution evidence. Earlier snapshots are replaced;
-this is not an archive of every callback. A queued update is not yet durable.
-If a crash precedes its database write, recovery still needs that evidence from
-IB. Committed executions whose position update was interrupted are replayed from
-the saved order without counting already checkpointed fills again.
+Each accepted order update saves the latest Trade snapshot alongside the
+authoritative execution and commission evidence in ``OrderInfo.fills``.
+``OrderInfo.trade_log`` preserves observed IB lifecycle entries across
+reconnects, including the initial submission time when available. Earlier
+records seed this history from their saved Trade log. A queued update is not yet
+durable. Committed executions whose position update was interrupted are replayed
+from the saved order without counting already checkpointed fills again.
+
+.. _terminal-order:
+
+A **terminal order** has a recorded IB order status of ``Filled``,
+``Cancelled``, or ``ApiCancelled``. A cancelled order may have partial
+fills, and commission reports can still be pending when an order becomes
+terminal.
+
+When a known terminal order has missing execution evidence, reconciliation
+checks the saved Trade and the existing IB caches before verifying positions.
+A terminal execution quantity that remains unexplained after the normal sync
+retries prevents trading from resuming. A missing commission is handled by the
+separate commission timeout and reporting path.
 
 Execution identity uses matching permanent IDs when available, falling back to
 client/order IDs only when a permanent ID is absent. Foreign fills attached by IB
@@ -957,10 +971,10 @@ Status, execution and commission callbacks remain active during startup,
 reconnect and workload shutdown. Book deduplicates execution accounting;
 Controller has no callback ``hold`` mode. Reconciliation also recovers late
 commission reports for known working and terminal orders. Blotter output waits
-for terminal status and every actual execution's commission report. With explicit
-BAG legs, their reports supply commissions; the aggregate BAG execution is not an
-additional charge. Real executions awaiting commissions are never treated as
-empty placeholders.
+for the order to be :ref:`terminal <terminal-order>` and for every actual
+execution's commission report. With explicit BAG legs, their reports supply
+commissions; the aggregate BAG execution is not an additional charge. Real
+executions awaiting commissions are never treated as empty placeholders.
 
 ``controller.commission_timeout`` defaults to 30 seconds after terminal status is
 observed. The wait does not block execution accounting or reconciliation. A timeout

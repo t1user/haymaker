@@ -2,8 +2,10 @@
 
 from runtime_helpers import replace_signal_state, signal_execution_state
 
+from datetime import datetime, timezone
 from unittest.mock import Mock
 
+import ib_insync as ibi
 import pytest
 
 from haymaker.async_wrappers import QueueProcessingError
@@ -112,6 +114,85 @@ def test_rebound_order_is_counted_once_after_restart(book, order_saver, state_sa
         assert len(book.orders.query()) == 1
         assert book.orders.by_perm_id(900).orderId == order_id
         assert not book.apply_fill(rebound, execution)
+
+
+def test_trade_log_survives_legacy_restore_rebind_and_overlap(
+    book, order_saver, state_saver
+):
+    original = trade()
+    time = datetime.now(timezone.utc)
+    pending = ibi.TradeLogEntry(time, "PendingSubmit", "None")
+    repeated = ibi.TradeLogEntry(time, "Submitted", "Modify")
+    original.log.extend((pending, repeated, repeated))
+    book.save_order(order_info(original))
+    del order_saver.read({})[0]["trade_log"]
+
+    book = restore(order_saver, state_saver)
+    rebound = trade(order_id=2)
+    rebound.log.append(repeated)
+    book.rebind_trade(rebound)
+    rebound.log.append(repeated)
+    book.rebind_trade(rebound)
+    book = restore(order_saver, state_saver)
+    book.rebind_trade(trade(order_id=2))  # A fresh connection has no log.
+    book = restore(order_saver, state_saver)
+    info = book.orders.by_id(2)
+    assert info.trade_log == (pending, repeated, repeated, repeated)
+    assert info.trade.log == []
+    assert rebound.log == [repeated, repeated]
+
+
+def test_terminal_rebind_preserves_all_raw_fills_before_projection_failure(
+    book, order_saver, state_saver, monkeypatch
+):
+    original = trade()
+    original.orderStatus.status = "Filled"
+    original.orderStatus.filled = 2
+    original.fills.extend(
+        fill(original, exec_id=exec_id) for exec_id in ("first", "second")
+    )
+    book.save_order(order_info(original))
+
+    book = restore(order_saver, state_saver)
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            state_saver, "save", Mock(side_effect=RuntimeError("position write"))
+        )
+        with pytest.raises(RuntimeError, match="position write"):
+            book.rebind_trade(trade())
+
+    for _ in range(2):
+        book = restore(order_saver, state_saver)
+        records = book.orders.by_id(original.order.orderId).fills
+        assert [record.execution.execId for record in records] == ["first", "second"]
+        assert all(record.commission_report.commission == 1 for record in records)
+        assert book.positions.filled_quantity(original.contract) == 2
+
+
+def test_terminal_recovery_rejects_execution_before_correction(
+    book, order_saver, state_saver
+):
+    original = trade()
+    original.orderStatus.status = "Cancelled"
+    original.orderStatus.filled = 1
+    original.fills.append(fill(original))
+    book.save_order(order_info(original))
+    book._update_signal_state(
+        signal_execution_state(
+            signal_key="alpha",
+            execution_model_name="brackets",
+            contract=original.contract,
+        )
+    )
+    book.correct_signal_position("alpha", 0, datetime.now(timezone.utc))
+    book = restore(order_saver, state_saver)
+
+    with pytest.raises(
+        ValueError, match="predates a reset, correction or position change"
+    ):
+        book.recover_terminal_executions(book.orders.by_id(original.order.orderId))
+    assert book.positions.filled_quantity(original.contract) == 0
+    assert not book.orders.by_id(original.order.orderId).fills
 
 
 def test_live_replay_and_new_fill_after_reset_keep_checkpoint(

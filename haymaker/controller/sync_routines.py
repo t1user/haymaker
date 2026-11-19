@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Self
 
 import ib_insync as ibi
 
 from haymaker.book import Book, FillRecord
+from haymaker.blotter import execution_totals
 from haymaker.components.messages import StandardOrderRole
 
 log = logging.getLogger(__name__)
@@ -26,6 +28,11 @@ class OrderSync:
         self.errors: list[ibi.Trade] = []
         self.unresolved: list[ibi.Trade] = []
         self.recovered_fills: list[tuple[ibi.Trade, ibi.Fill]] = []
+        self.recovered_terminal_fills = False
+        self.terminal_gaps: list[str] = []
+        self._trades_by_perm_id = {
+            trade.order.permId: trade for trade in ib.trades() if trade.order.permId
+        }
         self._fills_by_perm_id: dict[int, list[ibi.Fill]] = {}
         self._fills_by_order_id: dict[tuple[int, int], list[ibi.Fill]] = {}
         for fill in ib.fills():
@@ -36,7 +43,42 @@ class OrderSync:
 
     def run(self) -> Self:
         """Rebind, recover and classify one pass explicitly."""
+        self.recover_terminal_orders()
+        if self.terminal_gaps:
+            return self
         return self.update_trades().review_trades().handle_inactive_trades().report()
+
+    def recover_terminal_orders(self) -> None:
+        """Repair order-level gaps using the saved snapshot and existing IB caches."""
+        for info in self.book.orders.query():
+            trade = info.trade
+            if not trade.isDone():
+                continue
+            current = self._trades_by_perm_id.get(info.permId)
+            extra_fills = self._matching_broker_fills(trade)
+            if current is not None and current is not trade:
+                extra_fills = (*extra_fills, *current.fills)
+            received = len(info.fills)
+            self.book.recover_terminal_executions(info, extra_fills)
+            self.recovered_terminal_fills |= len(info.fills) > received
+            expected = trade.orderStatus.filled
+            if trade.orderStatus.status == ibi.OrderStatus.Filled:
+                expected = max(expected, trade.order.totalQuantity)
+            if expected <= 0:
+                continue
+            if isinstance(trade.contract, ibi.Bag):
+                normalized = replace(
+                    trade, fills=[fill.to_fill() for fill in info.fills]
+                )
+                quantity, _ = execution_totals(normalized)
+            else:
+                quantity = sum(fill.execution.shares for fill in info.fills)
+            if quantity < expected:
+                self.terminal_gaps.append(
+                    f"Terminal order evidence incomplete: orderId={info.orderId} "
+                    f"permId={info.permId} expected={expected} normalized={quantity}; "
+                    "checked saved Trade, session Trades and cached executions"
+                )
 
     @property
     def lists(self) -> tuple[list[ibi.Trade], list[ibi.Trade], list[ibi.Trade]]:
@@ -101,13 +143,8 @@ class OrderSync:
     def handle_inactive_trades(self) -> Self:
         """Match inactive local Trades to session history or execution fills."""
 
-        known = {
-            trade.order.permId: trade
-            for trade in self.ib.trades()
-            if trade.order.permId
-        }
         for old_trade in self.inactive:
-            current = known.get(old_trade.order.permId)
+            current = self._trades_by_perm_id.get(old_trade.order.permId)
             if current is not None:
                 current.order.orderId = old_trade.order.orderId
                 info = self.book.orders.by_id(old_trade.order.orderId)
@@ -177,7 +214,7 @@ class OrderSync:
 
     @property
     def is_ok(self) -> bool:
-        return not (any(self.lists) or self.unresolved)
+        return not (any(self.lists) or self.unresolved or self.terminal_gaps)
 
     @property
     def is_error(self) -> bool:

@@ -144,6 +144,7 @@ class SignalExecutionState:
     target: SignalTarget | None = None
     blocked_direction: Literal[-1, 1] | None = None
     _applied_fill_keys: frozenset[str] = field(default_factory=frozenset, repr=False)
+    fill_recovery_cutoff: datetime | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -289,7 +290,13 @@ class SignalExecutionState:
             contract=None if flat else self.contract,
             protection_inputs=protection.protection_inputs,
         )
-        return replace(self, position=position, target=target, protection=protection)
+        return replace(
+            self,
+            position=position,
+            target=target,
+            protection=protection,
+            fill_recovery_cutoff=corrected_at,
+        )
 
     def encode(self) -> dict[str, Any]:
         """Serialize the position and its applied-fill checkpoint together."""
@@ -309,6 +316,7 @@ class SignalExecutionState:
             "protection_inputs": tree(dict(self.protection_inputs)),
             "updated_at": self.updated_at,
             "applied_fill_keys": sorted(self._applied_fill_keys),
+            "fill_recovery_cutoff": self.fill_recovery_cutoff,
         }
 
     @classmethod
@@ -350,6 +358,17 @@ class SignalExecutionState:
             ),
             blocked_direction=data.get("blocked_direction"),
             _applied_fill_keys=frozenset(data["applied_fill_keys"]),
+            fill_recovery_cutoff=decode_tree(
+                data.get(
+                    "fill_recovery_cutoff",
+                    (
+                        position.updated_at
+                        if target is not None
+                        and target.target_created_at == position.updated_at
+                        else None
+                    ),
+                )
+            ),
         )
 
 
@@ -445,6 +464,8 @@ class PositionStore:
         previous = self._signals.get(state.signal_key)
         return replace(
             state,
+            fill_recovery_cutoff=state.fill_recovery_cutoff
+            or (previous.fill_recovery_cutoff if previous else None),
             _applied_fill_keys=state._applied_fill_keys
             | received_keys
             | (previous._applied_fill_keys if previous else frozenset()),

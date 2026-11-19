@@ -245,6 +245,38 @@ async def test_terminal_commissions_recovered_from_history_without_callbacks(
     assert blotter.blotter[0]["commission"] == 2.5
 
 
+@pytest.mark.parametrize("source", ["saved", "cache", "session", "both", "neither"])
+async def test_terminal_fill_recovery_uses_available_evidence(
+    entry_path, restart_entry, order_saver, monkeypatch, source
+):
+    runtime, broker, _, _ = entry_path
+    opening = broker.submitted[0]
+    execution = await broker.fill(opening, 3, notify_events=False)
+    execution.commissionReport.execId = execution.execution.execId
+    execution.commissionReport.commission = 1.25
+    runtime.controller.onOrderStatusEvent(opening)
+    document = order_saver.read({"orderId": opening.order.orderId})[0]
+    assert not document["fills"]
+    if source in {"cache", "session", "neither"}:
+        document["trade"]["Trade"].pop("fills")
+
+    fresh, replacement, controller, _ = restart_entry(runtime, broker)
+    if source in {"saved", "session", "neither"}:
+        monkeypatch.setattr(replacement, "fills", lambda: [])
+    if source == "session":
+        monkeypatch.setattr(replacement, "trades", lambda: replacement.submitted)
+    if source == "neither":
+        assert await controller.run() is SyncOutcome.FAILED
+        assert not fresh.book.orders.by_id(opening.order.orderId).fills
+        return
+    assert await controller.run() is SyncOutcome.OK
+    for book in (fresh.book, restart_entry(fresh, replacement)[0].book):
+        (record,) = book.orders.by_id(opening.order.orderId).fills
+        assert record.execution.execId == execution.execution.execId
+        assert record.commission_report.commission == 1.25
+        assert book.positions.filled_quantity(opening.contract) == 3
+
+
 @pytest.mark.parametrize("winner", ["close", "take_profit"])
 async def test_missing_stop_exit_cannot_reverse_exposure(
     entry_path, restart_entry, winner

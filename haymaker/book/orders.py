@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from ..saver import AbstractBaseSaver
 from .persistence import PersistenceWriter
 
@@ -108,6 +108,14 @@ class FillRecord:
             self.time,
         )
 
+    def _same_execution(self, fill: ibi.Fill) -> bool:
+        return (
+            self.execution.shares == fill.execution.shares
+            and self.execution.price == fill.execution.price
+            and self.execution.side == fill.execution.side
+            and self.contract == fill.contract
+        )
+
     def encode(self) -> dict[str, Any]:
         """Return a persistence-ready normalized fill document."""
 
@@ -149,6 +157,7 @@ class OrderInfo:
         position_id: Optional independently managed position identity.
         params: Diagnostic inputs captured at submission.
         fills: Normalized execution evidence already observed.
+        trade_log: Observed IB log entries, retained across Trade replacement.
     """
 
     trade: ibi.Trade
@@ -159,9 +168,11 @@ class OrderInfo:
     position_id: str | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
     fills: Sequence[FillRecord] = field(default_factory=tuple)
+    trade_log: tuple[ibi.TradeLogEntry, ...] = ()
     _applied_fill_keys: set[str] = field(default_factory=set, repr=False)
     previous_order_ids: tuple[int, ...] = ()
     _persistence_priority: int = field(default=0, repr=False)
+    _captured_log_length: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.trade, ibi.Trade):
@@ -180,6 +191,33 @@ class OrderInfo:
         self._applied_fill_keys.update(
             record.deduplication_key for record in self.fills
         )
+
+    def _capture_trade_log(self) -> None:
+        """Capture the suffix appended to the currently bound Trade."""
+        entries = self.trade.log[self._captured_log_length :]
+        if entries:
+            self.trade_log += tuple(replace(entry) for entry in entries)
+            self._captured_log_length = len(self.trade.log)
+
+    def _capture_rebound_log(self, trade: ibi.Trade) -> None:
+        """Carry forward the observed history, allowing repeated entries."""
+        self._capture_trade_log()
+        if not trade.log:
+            self._captured_log_length = 0
+            return
+        observed = Counter(
+            (entry.time, entry.status, entry.message, entry.errorCode)
+            for entry in self.trade_log
+        )
+        new_entries = []
+        for entry in trade.log:
+            key = (entry.time, entry.status, entry.message, entry.errorCode)
+            if observed[key]:
+                observed[key] -= 1
+            else:
+                new_entries.append(replace(entry))
+        self.trade_log += tuple(new_entries)
+        self._captured_log_length = len(trade.log)
 
     @property
     def orderId(self) -> int:
@@ -254,12 +292,7 @@ class OrderInfo:
                 continue
             record = FillRecord.from_fill(self.trade, fill)
             previous = records.get(record.deduplication_key)
-            if previous is not None and (
-                previous.execution.shares != record.execution.shares
-                or previous.execution.price != record.execution.price
-                or previous.execution.side != record.execution.side
-                or previous.contract != record.contract
-            ):
+            if previous is not None and not previous._same_execution(fill):
                 raise ValueError(f"Conflicting execution {record.deduplication_key!r}")
             if previous is None:
                 records[record.deduplication_key] = record
@@ -299,11 +332,13 @@ class OrderInfo:
     def encode(self) -> dict[str, Any]:
         """Return the complete order document stored by Book."""
 
+        self._capture_trade_log()
         return {
             "orderId": self.orderId,
             "clientId": self.trade.order.clientId,
             "permId": self.permId,
             "trade": tree(self.trade),
+            "trade_log": tree(self.trade_log),
             "role": self.role,
             "submitted_at": self.submitted_at,
             "execution_model_name": self.execution_model_name,
@@ -325,8 +360,12 @@ class OrderInfo:
             raise ValueError(
                 "Book order lacks signal attribution; standalone conversion required"
             )
-        return cls(
-            trade=decode_tree(data["trade"]),
+        trade = decode_tree(data["trade"])
+        info = cls(
+            trade=trade,
+            trade_log=tuple(
+                decode_tree(data["trade_log"]) if "trade_log" in data else trade.log
+            ),
             role=str(data["role"]),
             submitted_at=decode_tree(data["submitted_at"]),
             execution_model_name=str(data["execution_model_name"]),
@@ -338,6 +377,8 @@ class OrderInfo:
             previous_order_ids=tuple(data.get("previous_order_ids", ())),
             _persistence_priority=int(data.get("priority", 0)),
         )
+        info._captured_log_length = len(trade.log)
+        return info
 
 
 class OrderStore:
@@ -435,14 +476,13 @@ class OrderStore:
         for info in self._items.values():
             self._index_fills(info)
 
-    def _rebind(self, trade: ibi.Trade) -> tuple[OrderInfo | None, int]:
-        """Bind a known live Trade and return its record and previous broker ID."""
+    def _match_trade(self, trade: ibi.Trade) -> OrderInfo | None:
+        """Resolve the known order only after checking for an identity conflict."""
         self._check_identity(trade)
-        info = self.by_id(trade.order.orderId)
-        if info is None:
-            info = self.by_perm_id(trade.order.permId)
-        if info is None:
-            return None, 0
+        return self.by_id(trade.order.orderId) or self.by_perm_id(trade.order.permId)
+
+    def _rebind(self, info: OrderInfo, trade: ibi.Trade) -> int:
+        """Bind a matched Trade and return its previous broker ID."""
         old_order_id = info.orderId
         if self._items.get(old_order_id) is not info:
             # IB may mutate the same Trade in place before delivering its event.
@@ -464,10 +504,12 @@ class OrderStore:
         # Recovered Trades can have shorter logs. Their newer evidence must not
         # lose MongoSaver's priority comparison against the prior document.
         info._persistence_priority = info.priority
+        if info.trade is not trade:
+            info._capture_rebound_log(trade)
         info.trade = trade
         if old_order_id != info.orderId:
             self._items.pop(old_order_id, None)
-        return info, old_order_id
+        return old_order_id
 
     def by_id(self, order_id: int, *, active_only: bool = False) -> OrderInfo | None:
         """Look up an order by actual broker orderId."""

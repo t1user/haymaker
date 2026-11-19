@@ -164,6 +164,7 @@ class Controller(Atom):
             )
         self.ib.execDetailsEvent.connect(self.onExecDetailsEvent, self._log_event_error)
         self.ib.newOrderEvent.connect(self.onNewOrderEvent, self._log_event_error)
+        self.ib.orderModifyEvent.connect(self.onOrderModifyEvent, self._log_event_error)
         self.ib.orderStatusEvent.connect(self.onOrderStatusEvent, self._log_event_error)
         self.ib.orderStatusEvent.connect(self.log_order_status, self._log_event_error)
         self.ib.errorEvent.connect(self.onErrEvent, self._log_event_error)
@@ -684,6 +685,10 @@ class Controller(Atom):
         info = self.book.orders.by_id(trade.order.orderId)
         if info is not None:
             self.check_commission_completion(info)
+
+    def onOrderModifyEvent(self, trade: ibi.Trade) -> None:
+        """Retain IB's local Modify log entry before acknowledgement."""
+        self.book.rebind_trade(trade)
 
     def register_position(self, trade: ibi.Trade, fill: ibi.Fill) -> None:
         """Apply one execution idempotently to Book projections."""

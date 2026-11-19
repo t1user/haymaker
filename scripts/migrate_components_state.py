@@ -178,6 +178,7 @@ def convert_order(
         "clientId": trade.order.clientId,
         "permId": trade.order.permId,
         "trade": tree(trade),
+        "trade_log": tree(trade.log),
         "role": role,
         "submitted_at": _submitted_at(trade),
         "execution_model_name": f"legacy:{signal_key}",
